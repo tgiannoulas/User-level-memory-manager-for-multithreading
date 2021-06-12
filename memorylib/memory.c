@@ -23,19 +23,20 @@
 #define MAX_PG_BLOCK_SIZE 262144
 
 struct pg_block_header {
-	struct pg_block_header *next, *prev;		// Used by the lists
-	void *remotely_freed_LIFO;			// LIFO TODO: don't know exactly what it is
-	int id;								// TODO: probably not an integer
-	unsigned int object_size;			// The size of each oblject
-	void *unallocated_ptr;				// Points to the first unallocated object
-	void *freed_LIFO;					// LIFO that points to the head of
-	unsigned int unallocated_objects;	// How many unallocated object there are in this pg_block
-	unsigned int freed_objects;			// How many free objects there are in this pg_block
+	struct pg_block_header *next;			// Used by the lists
+	struct pg_block_header *prev;			// Used by the lists
+	void *remotely_freed_LIFO;				// LIFO TODO: don't know exactly what it is
+	int id;														// TODO: probably not an integer
+	unsigned int object_size;					// The size of each oblject
+	void *unallocated_ptr;						// Points to the first unallocated object
+	void *freed_LIFO;									// Head of LIFO that saves freed objects
+	unsigned int unallocated_objects;	// Number of unallocated object in the pg_block
+	unsigned int freed_objects;				// Number of free objects in the pg_block
 };
 typedef struct pg_block_header pg_block_header_t;
 
 struct class_info{
-	int memory_class_size;
+	int memory_size;
 	int pg_block_size;
 	int obj_in_pg_block;
 	int wasted_obj_pg_header;
@@ -70,6 +71,7 @@ struct thread {
 
 typedef struct thread thread_t;
 
+// Given the size return the memory_class that it belongs to
 extern "C" int get_memory_class(size_t size) {
 	int memory_class = 0;
 	size--;
@@ -80,6 +82,33 @@ extern "C" int get_memory_class(size_t size) {
 	return memory_class;
 }
 
+extern "C" void pg_block_init(void *pg_block, int memory_class) {
+	// The first 8 bytes are the pointer to the pg_block_header
+	// At the start of every pg there is a pointer to the pg_block_header
+	pg_block_header_t *pg_ptr = (pg_block_header_t*) pg_block;
+	// After the pointer is the pg_block_header
+	pg_block_header_t *pg_block_header = (pg_block_header_t*) ((char*)pg_ptr +
+		sizeof(pg_ptr));
+
+	// Initialize pg_block_header fields
+	pg_block_header->remotely_freed_LIFO = NULL;
+	pg_block_header->id = 0; // TODO: find out what will be the id
+	pg_block_header->object_size = class_info[memory_class].memory_size;
+	pg_block_header->unallocated_ptr = (char*)pg_block + class_info[memory_class].
+		memory_size * class_info[memory_class].wasted_obj_pg_header;
+	pg_block_header->freed_LIFO = NULL;
+	pg_block_header->unallocated_objects = class_info[memory_class].
+		obj_in_pg_block;
+	pg_block_header->freed_objects = 0;
+
+	// Write the ptr to the pg_block_header at the start of every pg
+	// TODO: Optimization, pointer is 16KB alligned
+	for (int i = 0; i < class_info[memory_class].pg_block_size / pg_size; i++) {
+		pg_block_header_t **ptr = (pg_block_header_t**) ((char*)pg_block + i * pg_size);
+		*ptr = pg_block_header;
+	}
+}
+
 // Find the correct size for
 extern "C" void *pg_block_alloc(int memory_class) {
 
@@ -87,35 +116,9 @@ extern "C" void *pg_block_alloc(int memory_class) {
 		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (pg_block == MAP_FAILED) { handle_error("mmap failed"); }
 
-	// The first 8 bytes are the pointer to the pg_block_header
-	// At the start of every pg there is going to be a pointer to the pg_block_header
-	pg_block_header_t *pg_ptr = (pg_block_header_t*) pg_block;
-	// After the pointer, there is the pg_block_header
-	pg_block_header_t *pg_header = (pg_block_header_t*) ((char*)pg_ptr + sizeof(pg_ptr));
+	pg_block_init(pg_block, memory_class);
 
-	// Initialize pg_header
-	pg_header->remotely_freed_LIFO = NULL;
-	pg_header->id = 0; // TODO: find out what will be the id
-	pg_header->object_size = class_info[memory_class].memory_class_size;
-	pg_header->unallocated_ptr = (char*)pg_block + class_info[memory_class].memory_class_size *
-		class_info[memory_class].wasted_obj_pg_header;
-	pg_header->freed_LIFO = NULL;
-	pg_header->unallocated_objects = class_info[memory_class].obj_in_pg_block;
-	pg_header->freed_objects = 0;
-
-	// write the ptr at the start of every pg in the pg_block
-	printf("pg_block %p\n", pg_block);
-	for (int i = 0; i < class_info[memory_class].pg_block_size / pg_size; i++) {
-		void *ptr = (char*)pg_block + i * pg_size;
-		pg_block_header_t **tmp_pg_ptr = ptr;
-		*tmp_pg_ptr = pg_header;
-	}
-
-
-	//class_info[memory_class].obj_in_pg_block
-
-
-	return NULL;
+	return pg_block;
 }
 
 extern "C" void *my_malloc(size_t size) {
@@ -136,23 +139,17 @@ extern "C" void *my_malloc(size_t size) {
 		return NULL;
 	}
 
-
 	int memory_class = get_memory_class(size);
 	// if there is a pg_block check it
-
 	if (th.heap[memory_class] == NULL) {
 		// if there is no pg_block ask pg manager for a pg_block
+		th.heap[memory_class] = pg_block_alloc(memory_class);
+		printf("pg_block: %p\n", th.heap[memory_class]);
 	}
 	else {
 		// if there is free memory in the pg_block good
+
 	}
-
-
-	void *pg;
-	pg = pg_block_alloc(memory_class);
-	printf("pg: %p\n", pg);
-
-
 
 
 	return NULL;
@@ -172,13 +169,13 @@ __attribute__((constructor)) static void initializer(void) {
 	int memory_size = 2;
 	for (int i = 0; i < CLASSES; i++) {
 
-		/*---------- Initialize memory_class_size ----------*/
-		class_info[i].memory_class_size = memory_size = memory_size<<1;
+		/*---------- Initialize memory_size ----------*/
+		class_info[i].memory_size = memory_size = memory_size<<1;
 
 		/*---------- Initialize pg_block_size and obj_in_pg_block ----------*/
 		// Initial estimation
 		class_info[i].pg_block_size = OBJ_IN_PG_BLOCK_HINT *
-			class_info[i].memory_class_size;
+			class_info[i].memory_size;
 
 		// Normalize pg_block_size between MIN_PG_BLOCK_SIZE and MAX_PG_BLOCK_SIZE
 		if (class_info[i].pg_block_size < MIN_PG_BLOCK_SIZE) {
@@ -188,19 +185,19 @@ __attribute__((constructor)) static void initializer(void) {
 			class_info[i].pg_block_size = MAX_PG_BLOCK_SIZE;
 		}
 		class_info[i].obj_in_pg_block = class_info[i].pg_block_size /
-			class_info[i].memory_class_size;
+			class_info[i].memory_size;
 
 		// Measure the waste for the pg_block_header
 		class_info[i].wasted_obj_pg_header = PG_BLOCK_HEADER_SIZE /
-			class_info[i].memory_class_size;
+			class_info[i].memory_size;
 		if (class_info[i].wasted_obj_pg_header == 0) {
 			class_info[i].wasted_obj_pg_header = 1;
 		}
 
 		// Measure the waste/pg for the pointer to the pg_block_header
-		// TODO: Optimization: pointer is 16KB alligned
+		// TODO: Optimization, pointer is 16KB alligned
 		class_info[i].wasted_obj_ptr_per_pg = sizeof(pg_block_header_t *) /
-			class_info[i].memory_class_size;
+			class_info[i].memory_size;
 		if (class_info[i].wasted_obj_ptr_per_pg == 0) {
 			class_info[i].wasted_obj_ptr_per_pg = 1;
 		}
@@ -214,7 +211,7 @@ __attribute__((constructor)) static void initializer(void) {
 
 		#ifdef MEMORYLIB_DEBUG
 		printf("class: %d\n", i);
-		printf("\tmemory_class_size: %d\n", class_info[i].memory_class_size);
+		printf("\tmemory_size: %d\n", class_info[i].memory_size);
 		printf("\tpg_block_size: %d\n", class_info[i].pg_block_size);
 		printf("\tobj_in_pg_block: %d\n", class_info[i].obj_in_pg_block);
 		printf("\twasted_obj_pg_header: %d\n", class_info[i].wasted_obj_pg_header);
