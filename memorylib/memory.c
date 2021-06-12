@@ -36,12 +36,13 @@ struct pg_block_header {
 typedef struct pg_block_header pg_block_header_t;
 
 struct class_info{
-	int memory_size;
-	int pg_block_size;
-	int obj_in_pg_block;
-	int wasted_obj_pg_header;
-	int wasted_obj_ptr_per_pg;
-	int wasted_obj_ptr_total;
+	unsigned int memory_size;
+	unsigned int pg_block_size;
+	unsigned int number_of_pages;
+	unsigned int obj_in_pg_block;
+	unsigned int wasted_obj_pg_header;
+	unsigned int wasted_obj_ptr_per_pg;
+	unsigned int wasted_obj_ptr_total;
 };
 typedef struct class_info class_info_t;
 
@@ -82,6 +83,28 @@ extern "C" int get_memory_class(size_t size) {
 	return memory_class;
 }
 
+extern "C" void print_memory_class(unsigned int memory_class) {
+	printf("---------- Memory Class %u ----------\n", memory_class);
+	printf("memory_size: %u\n", class_info[memory_class].memory_size);
+	printf("pg_block_size: %u\n", class_info[memory_class].pg_block_size);
+	printf("number_of_pages: %u\n", class_info[memory_class].number_of_pages);
+	printf("obj_in_pg_block: %u\n", class_info[memory_class].obj_in_pg_block);
+	printf("wasted_obj_pg_header: %u\n", class_info[memory_class].wasted_obj_pg_header);
+	printf("wasted_obj_ptr_per_pg: %u\n", class_info[memory_class].wasted_obj_ptr_per_pg);
+	printf("wasted_obj_ptr_total: %u\n", class_info[memory_class].wasted_obj_ptr_total);
+	printf("------------------------------------\n");
+}
+
+extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
+	printf("-------- Page Block Header --------\n");
+	printf("pg_block_header: %p\n", pg_block_header);
+	printf("id: %d\n", pg_block_header->id);
+	printf("object_size: %u\n", pg_block_header->object_size);
+	printf("unallocated_objects: %u\n", pg_block_header->unallocated_objects);
+	printf("freed_objects: %u\n", pg_block_header->freed_objects);
+	printf("------------------------------------\n");
+}
+
 extern "C" void pg_block_init(void *pg_block, int memory_class) {
 	// The first 8 bytes are the pointer to the pg_block_header
 	// At the start of every pg there is a pointer to the pg_block_header
@@ -103,7 +126,7 @@ extern "C" void pg_block_init(void *pg_block, int memory_class) {
 
 	// Write the ptr to the pg_block_header at the start of every pg
 	// TODO: Optimization, pointer is 16KB alligned
-	for (int i = 0; i < class_info[memory_class].pg_block_size / pg_size; i++) {
+	for (unsigned int i = 0; i < class_info[memory_class].number_of_pages; i++) {
 		pg_block_header_t **ptr = (pg_block_header_t**) ((char*)pg_block + i * pg_size);
 		*ptr = pg_block_header;
 	}
@@ -119,6 +142,10 @@ extern "C" void *pg_block_alloc(int memory_class) {
 	pg_block_init(pg_block, memory_class);
 
 	return pg_block;
+}
+
+extern "C" void *obj_alloc(void *pg_block){
+	return NULL;
 }
 
 extern "C" void *my_malloc(size_t size) {
@@ -144,13 +171,13 @@ extern "C" void *my_malloc(size_t size) {
 	if (th.heap[memory_class] == NULL) {
 		// if there is no pg_block ask pg manager for a pg_block
 		th.heap[memory_class] = pg_block_alloc(memory_class);
-		printf("pg_block: %p\n", th.heap[memory_class]);
 	}
 	else {
-		// if there is free memory in the pg_block good
-
+		// if there is free memory in the pg_block return a ptr to an obj
 	}
-
+	obj_alloc(th.heap[memory_class]);
+	pg_block_header_t **ptr = (pg_block_header_t**)th.heap[memory_class];
+	print_pg_block_header(*ptr);
 
 	return NULL;
 }
@@ -184,6 +211,7 @@ __attribute__((constructor)) static void initializer(void) {
 		else if (class_info[i].pg_block_size > MAX_PG_BLOCK_SIZE) {
 			class_info[i].pg_block_size = MAX_PG_BLOCK_SIZE;
 		}
+		class_info[i].number_of_pages = class_info[i].pg_block_size / pg_size;
 		class_info[i].obj_in_pg_block = class_info[i].pg_block_size /
 			class_info[i].memory_size;
 
@@ -203,20 +231,15 @@ __attribute__((constructor)) static void initializer(void) {
 		}
 		// Total waste for all the pgs
 		class_info[i].wasted_obj_ptr_total = class_info[i].wasted_obj_ptr_per_pg *
-			class_info[i].pg_block_size / pg_size - 1;
+			(class_info[i].number_of_pages - 1);
 
 		// Measure how many objects in total are gonna be available in the pg_block
 		class_info[i].obj_in_pg_block -= class_info[i].wasted_obj_pg_header +
 			class_info[i].wasted_obj_ptr_total;
 
+
 		#ifdef MEMORYLIB_DEBUG
-		printf("class: %d\n", i);
-		printf("\tmemory_size: %d\n", class_info[i].memory_size);
-		printf("\tpg_block_size: %d\n", class_info[i].pg_block_size);
-		printf("\tobj_in_pg_block: %d\n", class_info[i].obj_in_pg_block);
-		printf("\twasted_obj_pg_header: %d\n", class_info[i].wasted_obj_pg_header);
-		printf("\twasted_obj_ptr_per_pg: %d\n", class_info[i].wasted_obj_ptr_per_pg);
-		printf("\twasted_obj_ptr_total: %d\n", class_info[i].wasted_obj_ptr_total);
+		print_memory_class(i);
 		#endif
 	}
 }
