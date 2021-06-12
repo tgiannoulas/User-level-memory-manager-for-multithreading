@@ -1,7 +1,7 @@
 /* Compile with g++ -Wall -shared -fPIC memory.c -o libmemory.so
  * It is important to compile all files that comprise the library
- * to the shared library in one step, rather than creating object 
- * files first and then building the shared library. 
+ * to the shared library in one step, rather than creating object
+ * files first and then building the shared library.
  */
 
 #include <stdio.h>
@@ -17,26 +17,26 @@
 
 #define MAX_SIZE_SMALL_OBJ 2048
 
-#define PAGE_BLOCK_HEADER_SIZE 128
+#define PG_BLOCK_HEADER_SIZE 128
 #define OBJ_IN_PG_BLOCK_HINT 1024
-#define MIN_PAGE_BLOCK_SIZE 16384
-#define MAX_PAGE_BLOCK_SIZE 262144
+#define MIN_PG_BLOCK_SIZE 16384
+#define MAX_PG_BLOCK_SIZE 262144
 
-struct page_block_header {
-	struct page_block_header *next, *prev;		// Used by the lists
+struct pg_block_header {
+	struct pg_block_header *next, *prev;		// Used by the lists
 	void *remotely_freed_LIFO;			// LIFO TODO: don't know exactly what it is
 	int id;								// TODO: probably not an integer
 	unsigned int object_size;			// The size of each oblject
 	void *unallocated_ptr;				// Points to the first unallocated object
-	void *freed_LIFO;					// LIFO that points to the head of 
-	unsigned int unallocated_objects;	// How many unallocated object there are in this page_block
-	unsigned int freed_objects;			// How many free objects there are in this page_block
+	void *freed_LIFO;					// LIFO that points to the head of
+	unsigned int unallocated_objects;	// How many unallocated object there are in this pg_block
+	unsigned int freed_objects;			// How many free objects there are in this pg_block
 };
-typedef struct page_block_header page_block_header_t;
+typedef struct pg_block_header pg_block_header_t;
 
 struct class_info{
 	int memory_class_size;
-	int page_block_size;
+	int pg_block_size;
 	int obj_in_pg_block;
 	int wasted_obj_pg_header;
 	int wasted_obj_ptr_per_pg;
@@ -46,7 +46,7 @@ typedef struct class_info class_info_t;
 
 // Global Variables
 class_info_t class_info[CLASSES];		// At element i there are info for memory_class i
-int page_size;
+int pg_size;
 
 struct thread {
 	int id;
@@ -80,19 +80,19 @@ extern "C" int get_memory_class(size_t size) {
 	return memory_class;
 }
 
-// Find the correct size for 
-extern "C" void *page_block_alloc(int memory_class) {
+// Find the correct size for
+extern "C" void *pg_block_alloc(int memory_class) {
 
-	void *pg_block = mmap(NULL, class_info[memory_class].page_block_size,
+	void *pg_block = mmap(NULL, class_info[memory_class].pg_block_size,
 		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (pg_block == MAP_FAILED) { handle_error("mmap failed"); }
 
-	// The first 8 bytes are the pointer to the page_block_header
-	// At the start of every page there is going to be a pointer to the page_block_header
-	page_block_header_t *pg_ptr = (page_block_header_t*) pg_block;
-	// After the pointer, there is the page_block_header
-	page_block_header_t *pg_header = (page_block_header_t*) ((char*)pg_ptr + sizeof(pg_ptr));
-	
+	// The first 8 bytes are the pointer to the pg_block_header
+	// At the start of every pg there is going to be a pointer to the pg_block_header
+	pg_block_header_t *pg_ptr = (pg_block_header_t*) pg_block;
+	// After the pointer, there is the pg_block_header
+	pg_block_header_t *pg_header = (pg_block_header_t*) ((char*)pg_ptr + sizeof(pg_ptr));
+
 	// Initialize pg_header
 	pg_header->remotely_freed_LIFO = NULL;
 	pg_header->id = 0; // TODO: find out what will be the id
@@ -102,11 +102,14 @@ extern "C" void *page_block_alloc(int memory_class) {
 	pg_header->freed_LIFO = NULL;
 	pg_header->unallocated_objects = class_info[memory_class].obj_in_pg_block;
 	pg_header->freed_objects = 0;
-	// write the ptr at the start of every page in the page_block
-	/*for (int i = 0; i < class_info[memory_class].page_size / page_size; i++) {
-		i * page_size
-		void *ptr = pg_block
-	}*/
+
+	// write the ptr at the start of every pg in the pg_block
+	printf("pg_block %p\n", pg_block);
+	for (int i = 0; i < class_info[memory_class].pg_block_size / pg_size; i++) {
+		void *ptr = (char*)pg_block + i * pg_size;
+		pg_block_header_t **tmp_pg_ptr = ptr;
+		*tmp_pg_ptr = pg_header;
+	}
 
 
 	//class_info[memory_class].obj_in_pg_block
@@ -122,7 +125,7 @@ extern "C" void *my_malloc(size_t size) {
 	// When the variable comes out of scope - namely at the end of the life of the thread,
 	// given that it is static, the destructor is executed (~thread).
 	thread_local static thread_t th;
-	
+
 	if (size <= 0) {
 		printf("my_malloc: Wrong size\n");
 		return NULL;
@@ -135,21 +138,21 @@ extern "C" void *my_malloc(size_t size) {
 
 
 	int memory_class = get_memory_class(size);
-	// if there is a page_block check it
+	// if there is a pg_block check it
 
 	if (th.heap[memory_class] == NULL) {
-		// if there is no page_block ask page manager for a page_block
+		// if there is no pg_block ask pg manager for a pg_block
 	}
 	else {
-		// if there is free memory in the page_block good
+		// if there is free memory in the pg_block good
 	}
 
 
-	void *page;
-	page = page_block_alloc(memory_class);
-	printf("page: %p\n", page);
-	
-	
+	void *pg;
+	pg = pg_block_alloc(memory_class);
+	printf("pg: %p\n", pg);
+
+
 
 
 	return NULL;
@@ -157,13 +160,13 @@ extern "C" void *my_malloc(size_t size) {
 
 extern "C" void my_free(void *ptr) {}
 
-// With the following we can define functions to be called when we enter the 
+// With the following we can define functions to be called when we enter the
 // library for the first time and when we exit the library.
 __attribute__((constructor)) static void initializer(void) {
 	#ifdef MEMORYLIB_DEBUG
 	printf("!!! Library loaded !!!\n");
 	#endif
-	page_size = getpagesize();
+	pg_size = getpagesize();
 
 	/*---------- Initialize class_info ----------*/
 	int memory_size = 2;
@@ -172,52 +175,52 @@ __attribute__((constructor)) static void initializer(void) {
 		/*---------- Initialize memory_class_size ----------*/
 		class_info[i].memory_class_size = memory_size = memory_size<<1;
 
-		/*---------- Initialize page_block_size and obj_in_pg_block ----------*/
+		/*---------- Initialize pg_block_size and obj_in_pg_block ----------*/
 		// Initial estimation
-		class_info[i].page_block_size = OBJ_IN_PG_BLOCK_HINT *
+		class_info[i].pg_block_size = OBJ_IN_PG_BLOCK_HINT *
 			class_info[i].memory_class_size;
 
-		// Normalize page_block_size between MIN_PAGE_BLOCK_SIZE and MAX_PAGE_BLOCK_SIZE
-		if (class_info[i].page_block_size < MIN_PAGE_BLOCK_SIZE) {
-			class_info[i].page_block_size = MIN_PAGE_BLOCK_SIZE;
+		// Normalize pg_block_size between MIN_PG_BLOCK_SIZE and MAX_PG_BLOCK_SIZE
+		if (class_info[i].pg_block_size < MIN_PG_BLOCK_SIZE) {
+			class_info[i].pg_block_size = MIN_PG_BLOCK_SIZE;
 		}
-		else if (class_info[i].page_block_size > MAX_PAGE_BLOCK_SIZE) {
-			class_info[i].page_block_size = MAX_PAGE_BLOCK_SIZE;
+		else if (class_info[i].pg_block_size > MAX_PG_BLOCK_SIZE) {
+			class_info[i].pg_block_size = MAX_PG_BLOCK_SIZE;
 		}
-		class_info[i].obj_in_pg_block = class_info[i].page_block_size /
+		class_info[i].obj_in_pg_block = class_info[i].pg_block_size /
 			class_info[i].memory_class_size;
 
-		// Measure the waste for the page_block_header
-		class_info[i].wasted_obj_pg_header = PAGE_BLOCK_HEADER_SIZE /
+		// Measure the waste for the pg_block_header
+		class_info[i].wasted_obj_pg_header = PG_BLOCK_HEADER_SIZE /
 			class_info[i].memory_class_size;
 		if (class_info[i].wasted_obj_pg_header == 0) {
 			class_info[i].wasted_obj_pg_header = 1;
 		}
 
-		// Measure the waste/page for the pointer to the page_block_header
+		// Measure the waste/pg for the pointer to the pg_block_header
 		// TODO: Optimization: pointer is 16KB alligned
-		class_info[i].wasted_obj_ptr_per_pg = sizeof(page_block_header_t *) /
+		class_info[i].wasted_obj_ptr_per_pg = sizeof(pg_block_header_t *) /
 			class_info[i].memory_class_size;
 		if (class_info[i].wasted_obj_ptr_per_pg == 0) {
 			class_info[i].wasted_obj_ptr_per_pg = 1;
 		}
-		// Total waste for all the pages
+		// Total waste for all the pgs
 		class_info[i].wasted_obj_ptr_total = class_info[i].wasted_obj_ptr_per_pg *
-			class_info[i].page_block_size / page_size - 1;
+			class_info[i].pg_block_size / pg_size - 1;
 
-		// Measure how many objects in total are gonna be available in the page_block
+		// Measure how many objects in total are gonna be available in the pg_block
 		class_info[i].obj_in_pg_block -= class_info[i].wasted_obj_pg_header +
 			class_info[i].wasted_obj_ptr_total;
 
-		//#ifdef MEMORYLIB_DEBUG
+		#ifdef MEMORYLIB_DEBUG
 		printf("class: %d\n", i);
 		printf("\tmemory_class_size: %d\n", class_info[i].memory_class_size);
-		printf("\tpage_block_size: %d\n", class_info[i].page_block_size);
+		printf("\tpg_block_size: %d\n", class_info[i].pg_block_size);
 		printf("\tobj_in_pg_block: %d\n", class_info[i].obj_in_pg_block);
 		printf("\twasted_obj_pg_header: %d\n", class_info[i].wasted_obj_pg_header);
 		printf("\twasted_obj_ptr_per_pg: %d\n", class_info[i].wasted_obj_ptr_per_pg);
 		printf("\twasted_obj_ptr_total: %d\n", class_info[i].wasted_obj_ptr_total);
-		//#endif
+		#endif
 	}
 }
 
