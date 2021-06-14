@@ -1,11 +1,12 @@
 CC = g++
 CFLAGS = -Wall -shared -fPIC
-OBJ = memory.so
+LIB = memory.so
+SRC = memory.c list.c
 
-all: $(OBJ)
+all: $(LIB)
 
-%.so: %.c
-	$(CC) $(CFLAGS) $*.c -o lib$*.so
+$(LIB): $(SRC)
+	$(CC) $(CFLAGS) $(SRC) -o lib$(LIB)
 
 clean:
-	rm -rf *.so
+	rm -rf $(LIB)

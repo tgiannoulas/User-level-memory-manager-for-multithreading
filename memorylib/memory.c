@@ -9,6 +9,7 @@
 #include <threads.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include "list.h"
 
 #define handle_error(msg) char* error; asprintf(&error, "File: %s, Line: %d: %s", __FILE__, __LINE__, msg); perror(error); exit(EXIT_FAILURE);
 
@@ -52,14 +53,14 @@ int pg_size;
 
 struct thread {
 	int id;
-	void *heap[CLASSES];
+	list_t heap[CLASSES];
 
 	thread() {
 		#ifdef MEMORYLIB_DEBUG
 		printf("thread: Implicitly caught thread start\n");
 		#endif
 		for (int i=0; i<CLASSES; i++) {
-			heap[i] = NULL;
+			list_init(&heap[i]);
 		}
 	}
 
@@ -111,6 +112,12 @@ extern "C" pg_block_header_t *pg_block_to_pg_block_header(void *pg_block) {
 	return (*((pg_block_header_t**)pg_block));
 }
 
+// Returns the pointer to pg_block, just for ease of use
+extern "C" void *pg_block_header_to_pg_block(void *pg_block_header) {
+	void *pg_block = (char*)pg_block_header - sizeof(void*);
+	return pg_block;
+}
+
 // Initializes pg_block and pg_block_header
 extern "C" void pg_block_init(void *pg_block, int memory_class) {
 	// The first 8 bytes are the pointer to the pg_block_header
@@ -121,6 +128,8 @@ extern "C" void pg_block_init(void *pg_block, int memory_class) {
 		sizeof(pg_ptr));
 
 	// Initialize pg_block_header fields
+	pg_block_header->next = NULL;
+	pg_block_header->prev = NULL;
 	pg_block_header->remotely_freed_LIFO = NULL;
 	pg_block_header->id = 0; // TODO: find out what will be the id
 	pg_block_header->object_size = class_info[memory_class].memory_size;
@@ -196,16 +205,18 @@ extern "C" void *my_malloc(size_t size) {
 	}
 
 	int memory_class = get_memory_class(size);
-	// if there is a pg_block check it
-	if (th.heap[memory_class] == NULL) {
-		// if there is no pg_block ask pg manager for a pg_block
-		th.heap[memory_class] = pg_block_alloc(memory_class);
+
+	// if there is no pg_block ask pg_manager for a pg_block
+	if (list_is_empty(&th.heap[memory_class])) {
+		list_insert_front(&th.heap[memory_class],
+				pg_block_to_pg_block_header(pg_block_alloc(memory_class)));
 	}
-	else {
-		// if there is free memory in the pg_block return a ptr to an obj
-	}
-	void *obj = obj_alloc(pg_block_to_pg_block_header(th.heap[memory_class]));
-	print_pg_block_header(pg_block_to_pg_block_header(th.heap[memory_class]));
+
+	pg_block_header_t *pg_block_header = (pg_block_header_t*)
+		list_get_front(&th.heap[memory_class]);
+
+	void *obj = obj_alloc(pg_block_header);
+	print_pg_block_header(pg_block_header);
 
 	return obj;
 }
