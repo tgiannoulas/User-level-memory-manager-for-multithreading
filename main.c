@@ -9,8 +9,10 @@
 
 int main (int argc, char *argv[]) {
 
-	void *ptr1 = my_malloc(4);
-	void *ptr2 = my_malloc(4);
+	void *ptr1 = my_malloc(8);
+	void *ptr2 = my_malloc(8);
+	printf("%p\n", ptr1);
+	printf("%p\n", ptr2);
 	my_free(ptr1);
 	my_free(ptr2);
 

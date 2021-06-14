@@ -47,7 +47,7 @@ struct class_info{
 typedef struct class_info class_info_t;
 
 // Global Variables
-class_info_t class_info[CLASSES];		// At element i there are info for memory_class i
+class_info_t class_info[CLASSES];		// Info for memory_classes
 int pg_size;
 
 struct thread {
@@ -72,17 +72,6 @@ struct thread {
 
 typedef struct thread thread_t;
 
-// Given the size return the memory_class that it belongs to
-extern "C" int get_memory_class(size_t size) {
-	int memory_class = 0;
-	size--;
-	while(size > 3) {
-		size = size>>1;
-		memory_class++;
-	}
-	return memory_class;
-}
-
 extern "C" void print_memory_class(unsigned int memory_class) {
 	printf("---------- Memory Class %u ----------\n", memory_class);
 	printf("memory_size: %u\n", class_info[memory_class].memory_size);
@@ -105,6 +94,24 @@ extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
 	printf("------------------------------------\n");
 }
 
+// Given the size return the memory_class that it belongs to
+extern "C" int get_memory_class(size_t size) {
+	int memory_class = 0;
+	size--;
+	while(size > 3) {
+		size = size>>1;
+		memory_class++;
+	}
+	return memory_class;
+}
+
+// Returns the pointer to pg_block_header, just for ease of use
+extern "C" pg_block_header_t *pg_block_to_pg_block_header(void *pg_block) {
+
+	return (*((pg_block_header_t**)pg_block));
+}
+
+// Initializes pg_block and pg_block_header
 extern "C" void pg_block_init(void *pg_block, int memory_class) {
 	// The first 8 bytes are the pointer to the pg_block_header
 	// At the start of every pg there is a pointer to the pg_block_header
@@ -144,15 +151,37 @@ extern "C" void *pg_block_alloc(int memory_class) {
 	return pg_block;
 }
 
-extern "C" void *obj_alloc(void *pg_block){
-	return NULL;
+// Given a pg_block_header the function allocates an object and returns it
+// If it fails, e.g. beacause the pg_block is full, it returns NULL
+extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
+	void *obj;
+	if (pg_block_header->freed_objects > 0) {
+		// Get object from the freed_LIFO
+		obj = pg_block_header->freed_LIFO;
+		// if object_size is 4 use pseudo_ptr
+		pg_block_header->freed_LIFO = *(void**)obj;
+		pg_block_header->freed_objects--;
+	}
+	else if (pg_block_header->unallocated_objects > 0) {
+		// Get object from the unallocated objects
+		obj = pg_block_header->unallocated_ptr;
+		pg_block_header->unallocated_ptr = ((char*)pg_block_header->unallocated_ptr
+			+ pg_block_header->object_size);
+		// TODO: what if its the last object
+		pg_block_header->unallocated_objects--;
+	}
+	else {
+		// Check the remotely_freed_LIFO
+		obj = NULL;
+	}
+	return obj;
 }
 
 extern "C" void *my_malloc(size_t size) {
-	// We define a thread_local variable, namely a variable that will be per-thread.
+	// We define a thread_local variable, that will be per-thread.
 	// We also make it static, in order to persist for the lifetime of the thread.
 	// When the variable comes to life, the constructor is executed (thread).
-	// When the variable comes out of scope - namely at the end of the life of the thread,
+	// When the variable comes out of scope, at the end of the life of the thread,
 	// given that it is static, the destructor is executed (~thread).
 	thread_local static thread_t th;
 
@@ -175,11 +204,10 @@ extern "C" void *my_malloc(size_t size) {
 	else {
 		// if there is free memory in the pg_block return a ptr to an obj
 	}
-	obj_alloc(th.heap[memory_class]);
-	pg_block_header_t **ptr = (pg_block_header_t**)th.heap[memory_class];
-	print_pg_block_header(*ptr);
+	void *obj = obj_alloc(pg_block_to_pg_block_header(th.heap[memory_class]));
+	print_pg_block_header(pg_block_to_pg_block_header(th.heap[memory_class]));
 
-	return NULL;
+	return obj;
 }
 
 extern "C" void my_free(void *ptr) {}
