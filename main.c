@@ -6,12 +6,12 @@
 #include "memorylib/memory.h"
 #include <unistd.h>
 
-#define ARRAY_SIZE 70
-#define MALLOC_SIZE 2000
+#define ARRAY_SIZE 6
+#define MALLOC_SIZE 1000
 
 int main (int argc, char *argv[]) {
 
-	void *ptr[ARRAY_SIZE];
+	long int *ptr[ARRAY_SIZE];
 
 	for (int i = 0; i < ARRAY_SIZE; i++) {
 		ptr[i] = my_malloc(MALLOC_SIZE);

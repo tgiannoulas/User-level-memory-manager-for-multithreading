@@ -57,10 +57,6 @@ struct class_info{
 };
 typedef struct class_info class_info_t;
 
-// Global Variables
-class_info_t class_info[CLASSES];		// Info for memory_classes
-int pg_size;
-
 struct thread {
 	int id;
 	list_t heap[CLASSES];
@@ -83,6 +79,11 @@ struct thread {
 
 typedef struct thread thread_t;
 
+// Global Variables
+class_info_t class_info[CLASSES];		// Info for memory_classes
+thread_local thread_t *th;
+int pg_size;
+
 extern "C" void print_memory_class(unsigned int memory_class) {
 	printf("---------- Memory Class %u ----------\n", memory_class);
 	printf("memory_size: %u\n", class_info[memory_class].memory_size);
@@ -95,6 +96,14 @@ extern "C" void print_memory_class(unsigned int memory_class) {
 	printf("------------------------------------\n");
 }
 
+extern "C" void print_LIFO(void *LIFO) {
+	while (LIFO != NULL) {
+		printf("%p->", LIFO);
+		LIFO = *(void**)LIFO;
+	}
+	printf("%p\n", LIFO);
+}
+
 extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
 	printf("-------- Page Block Header ---------\n");
 	printf("pg_block_header: %p\n", pg_block_header);
@@ -102,10 +111,14 @@ extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
 	printf("object_size: %u\n", pg_block_header->object_size);
 	printf("unallocated_objects: %u\n", pg_block_header->unallocated_objects);
 	printf("freed_objects: %u\n", pg_block_header->freed_objects);
+	printf("freed_LIFO: ");
+	print_LIFO(pg_block_header->freed_LIFO);
+	printf("remotely_freed_LIFO: ");
+	print_LIFO(pg_block_header->remotely_freed_LIFO);
 	printf("------------------------------------\n");
 }
 
-extern "C" void print_heap(thread_t *th) {
+extern "C" void print_heap() {
 	printf("--------------- Heap ---------------\n");
 	printf("th: %d\n", th->id);
 	for (int i = 0; i < CLASSES; i++) {
@@ -202,7 +215,7 @@ extern "C" void insert_pg_block(list_t *list, pg_block_header_t* pg_block_header
 }
 
 // Returns a pg_block that is not full
-extern "C" pg_block_header *get_pg_block(thread_t *th, int memory_class) {
+extern "C" pg_block_header *get_pg_block(int memory_class) {
 	list_t *list = &th->heap[memory_class];
 	// Check if ther is no pg_block at all
 	if (list_is_empty(list)) {
@@ -221,15 +234,28 @@ extern "C" pg_block_header *get_pg_block(thread_t *th, int memory_class) {
 	return pg_block_header;
 }
 
+// Given a pointer the function returns the address of the address page
+extern "C" void *get_address_pg(void *ptr) {
+	long int pg_mask = ~(pg_size-1);
+	return ((void*)((long int)ptr & pg_mask));
+}
+
+// Given a pointer in a pg_block the function returns the pg_block_header
+// of this pg_block
+extern "C" pg_block_header_t *get_pg_block_header(void *ptr) {
+	return (*(pg_block_header_t **)get_address_pg(ptr));
+}
+
 // Given a pg_block_header the function allocates an object and returns it
 // If it fails, e.g. beacause the pg_block is full, it returns NULL
-extern "C" void *obj_alloc(thread_t *th, pg_block_header_t *pg_block_header) {
+extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 	void *obj;
+	int memory_class = get_memory_class(pg_block_header->object_size);
 	// Allocate an object
 	if (pg_block_header->freed_objects > 0) {
 		// Get object from the freed_LIFO
 		obj = pg_block_header->freed_LIFO;
-		// if object_size is 4 use pseudo_ptr
+		// TODO: Special case if obj_size is 4 bytes
 		pg_block_header->freed_LIFO = *(void**)obj;
 		pg_block_header->freed_objects--;
 	}
@@ -265,7 +291,8 @@ extern "C" void *my_malloc(size_t size) {
 	// When the variable comes to life, the constructor is executed (thread).
 	// When the variable comes out of scope, at the end of the life of the thread,
 	// given that it is static, the destructor is executed (~thread).
-	thread_local static thread_t th;
+	thread_local static thread_t my_th;
+	th = &my_th;
 
 	// Check input
 	if (size <= 0) {
@@ -281,11 +308,12 @@ extern "C" void *my_malloc(size_t size) {
 	int memory_class = get_memory_class(size);
 
 	// Get a pg_block
-	pg_block_header_t *pg_block_header = get_pg_block(&th, memory_class);
+	pg_block_header_t *pg_block_header = get_pg_block(memory_class);
+	//printf("pg_block_header %p\n", pg_block_header);
 	// Get an object
-	void *obj = obj_alloc(&th, pg_block_header);
+	void *obj = obj_alloc(pg_block_header);
 
-	print_heap(&th);
+	//print_heap();
 	return obj;
 }
 
