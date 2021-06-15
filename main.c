@@ -4,7 +4,6 @@
 
 #include <stdio.h>
 #include "memorylib/memory.h"
-#include <unistd.h>
 
 #define ARRAY_SIZE 6
 #define MALLOC_SIZE 1000

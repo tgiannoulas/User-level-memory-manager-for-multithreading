@@ -168,6 +168,16 @@ extern "C" int pg_block_is_full(pg_block_header_t *pg_block_header) {
 	return 0;
 }
 
+// Returns 1 if pg_block is full, 0 if it's not full
+extern "C" int pg_block_is_empty(pg_block_header_t *pg_block_header) {
+	if (pg_block_header->freed_objects + pg_block_header->unallocated_objects ==
+		class_info[get_memory_class(pg_block_header->object_size)].obj_in_pg_block
+		&& pg_block_header->remotely_freed_LIFO == NULL) {
+			return 1;
+	}
+	return 0;
+}
+
 // Initializes pg_block and pg_block_header
 extern "C" void pg_block_init(void *pg_block, int memory_class) {
 	// The first 8 bytes of every page in a pg_block are a pointer
@@ -209,26 +219,31 @@ extern "C" void *pg_block_alloc(int memory_class) {
 	return pg_block;
 }
 
-// Inserts pg_block to the list
-extern "C" void insert_pg_block(list_t *list, pg_block_header_t* pg_block_header) {
-	list_insert_front(list, pg_block_header);
+extern "C" void pg_block_free(pg_block_header_t* pg_block_header) {
+	void* pg_block = pg_block_header_to_pg_block(pg_block_header);
+	int memory_class = get_memory_class(pg_block_header->object_size);
+	if (munmap(pg_block, class_info[memory_class].pg_block_size) == -1)
+		{ handle_error("munmap failed"); }
 }
 
 // Returns a pg_block that is not full
 extern "C" pg_block_header *get_pg_block(int memory_class) {
-	list_t *list = &th->heap[memory_class];
 	// Check if ther is no pg_block at all
-	if (list_is_empty(list)) {
-		insert_pg_block(list, pg_block_to_pg_block_header(pg_block_alloc(memory_class)));
+	if (list_is_empty(&th->heap[memory_class])) {
+		list_insert_front(&th->heap[memory_class], pg_block_to_pg_block_header(
+			pg_block_alloc(memory_class)));
 	}
 
 	// Get the first pg_block
-	pg_block_header_t *pg_block_header = (pg_block_header_t*) list_get_front(list);
+	pg_block_header_t *pg_block_header = (pg_block_header_t*)list_get_front(
+		&th->heap[memory_class]);
 	// Check if its full - (just in case that i allocate an orphaned pg_block
 	// that is already being used and is full)
 	while (pg_block_is_full(pg_block_header)) {
-		insert_pg_block(list, pg_block_to_pg_block_header(pg_block_alloc(memory_class)));
-		pg_block_header = (pg_block_header_t*) list_get_front(list);
+		list_insert_front(&th->heap[memory_class], pg_block_to_pg_block_header(
+			pg_block_alloc(memory_class)));
+		pg_block_header = (pg_block_header_t*)list_get_front(
+			&th->heap[memory_class]);
 	}
 
 	return pg_block_header;
@@ -284,11 +299,10 @@ extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 	}
 
 	// I just took the last object, move pg_block at the end of the list
-	if (pg_block_is_full(pg_block_header)) {
-		list_remove(&th->heap[get_memory_class(pg_block_header->object_size)],
-			pg_block_header);
-		list_insert_back(&th->heap[get_memory_class(pg_block_header->object_size)],
-			pg_block_header);
+	if (pg_block_is_full(pg_block_header) &&
+		list_get_back(&th->heap[memory_class]) != pg_block_header) {
+		list_remove(&th->heap[memory_class], pg_block_header);
+		list_insert_back(&th->heap[memory_class],	pg_block_header);
 		}
 	return obj;
 }
@@ -325,7 +339,27 @@ extern "C" void *my_malloc(size_t size) {
 	return obj;
 }
 
-extern "C" void my_free(void *ptr) {}
+extern "C" void my_free(void *ptr) {
+	pg_block_header_t *pg_block_header = get_pg_block_header(ptr);
+	int memory_class = get_memory_class(pg_block_header->object_size);
+
+	// TODO: Special case if obj_size is 4 bytes
+
+	*(void**)ptr = pg_block_header->freed_LIFO;
+	pg_block_header->freed_LIFO = ptr;
+	pg_block_header->freed_objects++;
+
+	if (pg_block_is_empty(pg_block_header)) {
+		list_remove(&th->heap[memory_class], pg_block_header);
+		pg_block_free(pg_block_header);
+	}
+	else if (list_get_front(&th->heap[memory_class])	!= pg_block_header) {
+		list_remove(&th->heap[memory_class], pg_block_header);
+		list_insert_front(&th->heap[memory_class], pg_block_header);
+	}
+
+	print_heap();
+}
 
 // With the following we can define functions to be called when we enter the
 // library for the first time and when we exit the library.
