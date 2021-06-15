@@ -264,7 +264,15 @@ extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 		obj = pg_block_header->unallocated_ptr;
 		pg_block_header->unallocated_ptr = ((char*)pg_block_header->unallocated_ptr
 			+ pg_block_header->object_size);
-		// TODO: what if its the last object
+
+		// Check if unallocated_ptr is the address of a pointer to pg_block_header
+		void *pg = get_address_pg(pg_block_header->unallocated_ptr);
+		if (pg == pg_block_header->unallocated_ptr) {
+			// Skip wasted_objects_ptr_per_pg objects
+			pg_block_header->unallocated_ptr =
+				((char*)pg_block_header->unallocated_ptr + (pg_block_header->object_size
+				* class_info[memory_class].wasted_obj_ptr_per_pg));
+		}
 		pg_block_header->unallocated_objects--;
 	}
 	else if (pg_block_header->remotely_freed_LIFO != NULL) {
