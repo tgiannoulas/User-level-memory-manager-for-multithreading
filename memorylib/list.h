@@ -1,10 +1,8 @@
 #ifndef __LIST_H__
 #define __LIST_H__
-#include <stdio.h>
-#include <stdlib.h>
 
 struct list {
-	unsigned int size;
+	int size;
 	void *head;
 	void *tail;
 };

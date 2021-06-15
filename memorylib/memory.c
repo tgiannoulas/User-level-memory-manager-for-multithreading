@@ -15,6 +15,16 @@
 
 //#define MEMORYLIB_DEBUG
 #define CLASSES 10
+// 0 : 1-4
+// 1 : 5-8
+// 2 : 9-16
+// 3 : 17-32
+// 4 : 33-64
+// 5 : 65-128
+// 6 : 129-256
+// 7 : 257-512
+// 8 : 513-1024
+// 9 : 1025-2048
 
 #define MAX_SIZE_SMALL_OBJ 2048
 
@@ -86,12 +96,27 @@ extern "C" void print_memory_class(unsigned int memory_class) {
 }
 
 extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
-	printf("-------- Page Block Header --------\n");
+	printf("-------- Page Block Header ---------\n");
 	printf("pg_block_header: %p\n", pg_block_header);
 	printf("id: %d\n", pg_block_header->id);
 	printf("object_size: %u\n", pg_block_header->object_size);
 	printf("unallocated_objects: %u\n", pg_block_header->unallocated_objects);
 	printf("freed_objects: %u\n", pg_block_header->freed_objects);
+	printf("------------------------------------\n");
+}
+
+extern "C" void print_heap(thread_t *th) {
+	printf("--------------- Heap ---------------\n");
+	printf("th: %d\n", th->id);
+	for (int i = 0; i < CLASSES; i++) {
+		printf("class: %d, pg_blocks: %d\n", i, th->heap[i].size);
+		pg_block_header_t *pg_block_header = (pg_block_header_t*)
+			list_get_front(&th->heap[i]);
+		for (int j = 0; j < th->heap[i].size; j++) {
+			print_pg_block_header(pg_block_header);
+			pg_block_header = (pg_block_header_t*)list_get_next(pg_block_header);
+		}
+	}
 	printf("------------------------------------\n");
 }
 
@@ -106,26 +131,37 @@ extern "C" int get_memory_class(size_t size) {
 	return memory_class;
 }
 
-// Returns the pointer to pg_block_header, just for ease of use
+// Returns the pointer to pg_block_header
 extern "C" pg_block_header_t *pg_block_to_pg_block_header(void *pg_block) {
-
-	return (*((pg_block_header_t**)pg_block));
+	pg_block_header_t *pg_block_header =
+		(pg_block_header_t*)((char*)pg_block + sizeof(void*));
+	return pg_block_header;
 }
 
-// Returns the pointer to pg_block, just for ease of use
-extern "C" void *pg_block_header_to_pg_block(void *pg_block_header) {
+// Returns the pointer to pg_block
+extern "C" void *pg_block_header_to_pg_block
+	(pg_block_header_t *pg_block_header) {
 	void *pg_block = (char*)pg_block_header - sizeof(void*);
 	return pg_block;
 }
 
+// Returns 1 if pg_block is full, 0 if it's not full
+extern "C" int pg_block_is_full(pg_block_header_t *pg_block_header) {
+	if (pg_block_header->freed_objects == 0 &&
+		pg_block_header->unallocated_objects == 0 &&
+		pg_block_header->remotely_freed_LIFO == NULL) {
+			return 1;
+	}
+	return 0;
+}
+
 // Initializes pg_block and pg_block_header
 extern "C" void pg_block_init(void *pg_block, int memory_class) {
-	// The first 8 bytes are the pointer to the pg_block_header
-	// At the start of every pg there is a pointer to the pg_block_header
-	pg_block_header_t *pg_ptr = (pg_block_header_t*) pg_block;
-	// After the pointer is the pg_block_header
-	pg_block_header_t *pg_block_header = (pg_block_header_t*) ((char*)pg_ptr +
-		sizeof(pg_ptr));
+	// The first 8 bytes of every page in a pg_block are a pointer
+	// to the pg_block_header
+	// The pg_block_header is located in the first page of the pg_block,
+	// after the 8 bytes pointer
+	pg_block_header_t *pg_block_header = pg_block_to_pg_block_header(pg_block);
 
 	// Initialize pg_block_header fields
 	pg_block_header->next = NULL;
@@ -160,10 +196,36 @@ extern "C" void *pg_block_alloc(int memory_class) {
 	return pg_block;
 }
 
+// Inserts pg_block to the list
+extern "C" void insert_pg_block(list_t *list, pg_block_header_t* pg_block_header) {
+	list_insert_front(list, pg_block_header);
+}
+
+// Returns a pg_block that is not full
+extern "C" pg_block_header *get_pg_block(thread_t *th, int memory_class) {
+	list_t *list = &th->heap[memory_class];
+	// Check if ther is no pg_block at all
+	if (list_is_empty(list)) {
+		insert_pg_block(list, pg_block_to_pg_block_header(pg_block_alloc(memory_class)));
+	}
+
+	// Get the first pg_block
+	pg_block_header_t *pg_block_header = (pg_block_header_t*) list_get_front(list);
+	// Check if its full - (just in case that i allocate an orphaned pg_block
+	// that is already being used and is full)
+	while (pg_block_is_full(pg_block_header)) {
+		insert_pg_block(list, pg_block_to_pg_block_header(pg_block_alloc(memory_class)));
+		pg_block_header = (pg_block_header_t*) list_get_front(list);
+	}
+
+	return pg_block_header;
+}
+
 // Given a pg_block_header the function allocates an object and returns it
 // If it fails, e.g. beacause the pg_block is full, it returns NULL
-extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
+extern "C" void *obj_alloc(thread_t *th, pg_block_header_t *pg_block_header) {
 	void *obj;
+	// Allocate an object
 	if (pg_block_header->freed_objects > 0) {
 		// Get object from the freed_LIFO
 		obj = pg_block_header->freed_LIFO;
@@ -179,10 +241,21 @@ extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 		// TODO: what if its the last object
 		pg_block_header->unallocated_objects--;
 	}
-	else {
+	else if (pg_block_header->remotely_freed_LIFO != NULL) {
 		// Check the remotely_freed_LIFO
 		obj = NULL;
 	}
+	else {
+		// There is no object to allocate, Don't know if this eevr happens
+	}
+
+	// I just took the last object, move pg_block at the end of the list
+	if (pg_block_is_full(pg_block_header)) {
+		list_remove(&th->heap[get_memory_class(pg_block_header->object_size)],
+			pg_block_header);
+		list_insert_back(&th->heap[get_memory_class(pg_block_header->object_size)],
+			pg_block_header);
+		}
 	return obj;
 }
 
@@ -194,6 +267,7 @@ extern "C" void *my_malloc(size_t size) {
 	// given that it is static, the destructor is executed (~thread).
 	thread_local static thread_t th;
 
+	// Check input
 	if (size <= 0) {
 		printf("my_malloc: Wrong size\n");
 		return NULL;
@@ -206,18 +280,12 @@ extern "C" void *my_malloc(size_t size) {
 
 	int memory_class = get_memory_class(size);
 
-	// if there is no pg_block ask pg_manager for a pg_block
-	if (list_is_empty(&th.heap[memory_class])) {
-		list_insert_front(&th.heap[memory_class],
-				pg_block_to_pg_block_header(pg_block_alloc(memory_class)));
-	}
+	// Get a pg_block
+	pg_block_header_t *pg_block_header = get_pg_block(&th, memory_class);
+	// Get an object
+	void *obj = obj_alloc(&th, pg_block_header);
 
-	pg_block_header_t *pg_block_header = (pg_block_header_t*)
-		list_get_front(&th.heap[memory_class]);
-
-	void *obj = obj_alloc(pg_block_header);
-	print_pg_block_header(pg_block_header);
-
+	print_heap(&th);
 	return obj;
 }
 

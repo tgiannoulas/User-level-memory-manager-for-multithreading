@@ -6,15 +6,21 @@
 #include "memorylib/memory.h"
 #include <unistd.h>
 
+#define ARRAY_SIZE 70
+#define MALLOC_SIZE 2000
 
 int main (int argc, char *argv[]) {
 
-	void *ptr1 = my_malloc(8);
-	void *ptr2 = my_malloc(8);
-	printf("%p\n", ptr1);
-	printf("%p\n", ptr2);
-	my_free(ptr1);
-	my_free(ptr2);
+	void *ptr[ARRAY_SIZE];
+
+	for (int i = 0; i < ARRAY_SIZE; i++) {
+		ptr[i] = my_malloc(MALLOC_SIZE);
+		printf("%p\n", ptr[i]);
+	}
+
+	for (int i = 0; i < ARRAY_SIZE; i++) {
+		my_free(ptr[i]);
+	}
 
 	return 0;
 }
