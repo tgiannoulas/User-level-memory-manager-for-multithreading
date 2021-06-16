@@ -190,7 +190,7 @@ extern "C" void pg_block_init(void *pg_block, int memory_class) {
 	pg_block_header->next = NULL;
 	pg_block_header->prev = NULL;
 	pg_block_header->remotely_freed_LIFO = NULL;
-	pg_block_header->id = 0; // TODO: find out what will be the id
+	pg_block_header->id = 0;
 	pg_block_header->object_size = class_info[memory_class].memory_size;
 	pg_block_header->unallocated_ptr = (char*)pg_block + class_info[memory_class].
 		memory_size * class_info[memory_class].wasted_obj_pg_header;
@@ -358,7 +358,7 @@ extern "C" void my_free(void *ptr) {
 		list_insert_front(&th->heap[memory_class], pg_block_header);
 	}
 
-	print_heap();
+	//print_heap();
 }
 
 // With the following we can define functions to be called when we enter the
