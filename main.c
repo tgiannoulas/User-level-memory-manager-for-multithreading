@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include "memorylib/memory.h"
 
-#define ARRAY_SIZE 70
-#define MALLOC_SIZE 2000
+#define ARRAY_SIZE 4
+#define MALLOC_SIZE 8
 
 int main (int argc, char *argv[]) {
 

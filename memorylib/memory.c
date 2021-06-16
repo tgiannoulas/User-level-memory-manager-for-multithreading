@@ -9,6 +9,7 @@
 #include <threads.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <limits.h>
 #include "list.h"
 
 #define handle_error(msg) char* error; asprintf(&error, "File: %s, Line: %d: %s", __FILE__, __LINE__, msg); perror(error); exit(EXIT_FAILURE);
@@ -76,7 +77,6 @@ struct thread {
 		#endif
 	}
 };
-
 typedef struct thread thread_t;
 
 // Global Variables
@@ -255,6 +255,16 @@ extern "C" void *get_address_pg(void *ptr) {
 	return ((void*)((long int)ptr & pg_mask));
 }
 
+// Returns 4 Byte-pseudo ptr
+extern "C" int ptr_to_pseudo_ptr(void *ptr) {
+	return ((long int)ptr & UINT_MAX);
+}
+
+// Returns 4 Byte-pseudo ptr
+extern "C" void *pseudo_ptr_to_ptr(int *pseudo_ptr) {
+	return (void*)((long int)pseudo_ptr & (~0 - UINT_MAX + *pseudo_ptr));
+}
+
 // Given a pointer in a pg_block the function returns the pg_block_header
 // of this pg_block
 extern "C" pg_block_header_t *get_pg_block_header(void *ptr) {
@@ -331,7 +341,6 @@ extern "C" void *my_malloc(size_t size) {
 
 	// Get a pg_block
 	pg_block_header_t *pg_block_header = get_pg_block(memory_class);
-	//printf("pg_block_header %p\n", pg_block_header);
 	// Get an object
 	void *obj = obj_alloc(pg_block_header);
 
