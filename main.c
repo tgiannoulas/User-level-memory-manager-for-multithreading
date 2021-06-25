@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include "memorylib/memory.h"
 
-#define ARRAY_SIZE 4
-#define MALLOC_SIZE 8
+#define ARRAY_SIZE 8
+#define MALLOC_SIZE 4
 
 int main (int argc, char *argv[]) {
 
@@ -14,12 +14,14 @@ int main (int argc, char *argv[]) {
 
 	for (int i = 0; i < ARRAY_SIZE; i++) {
 		ptr[i] = my_malloc(MALLOC_SIZE);
-		printf("%p\n", ptr[i]);
 	}
+
 	print_heap();
+
 	for (int i = 0; i < ARRAY_SIZE; i++) {
 		my_free(ptr[i]);
 	}
+
 	print_heap();
 
 	return 0;

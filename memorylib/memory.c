@@ -15,6 +15,7 @@
 #define handle_error(msg) char* error; asprintf(&error, "File: %s, Line: %d: %s", __FILE__, __LINE__, msg); perror(error); exit(EXIT_FAILURE);
 
 //#define MEMORYLIB_DEBUG
+
 #define CLASSES 10
 // 0 : 1-4
 // 1 : 5-8
@@ -84,6 +85,21 @@ class_info_t class_info[CLASSES];		// Info for memory_classes
 thread_local thread_t *th;
 int pg_size;
 
+// If u want to print ptr in binary pass the size and the pointer to ptr
+extern "C" void printBits(size_t const size, void const *ptr) {
+	unsigned char *b = (unsigned char*) ptr;
+	unsigned char byte;
+	int i, j;
+	for (i = size-1; i >= 0; i--) {
+		for (j = 7; j >= 0; j--) {
+			byte = (b[i] >> j) & 1;
+			printf("%u", byte);
+		}
+		putchar(' ');
+	}
+	puts("");
+}
+
 extern "C" void print_memory_class(unsigned int memory_class) {
 	printf("---------- Memory Class %u ----------\n", memory_class);
 	printf("memory_size: %u\n", class_info[memory_class].memory_size);
@@ -96,41 +112,35 @@ extern "C" void print_memory_class(unsigned int memory_class) {
 	printf("------------------------------------\n");
 }
 
-extern "C" void print_LIFO(void *LIFO) {
-	while (LIFO != NULL) {
-		printf("%p->", LIFO);
-		LIFO = *(void**)LIFO;
-	}
-	printf("%p\n", LIFO);
+// Returns 4 Byte-pseudo ptr
+extern "C" int ptr_to_pseudo_ptr(void *ptr) {
+	return ((long int)ptr & UINT_MAX);
 }
 
-extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
-	printf("-------- Page Block Header ---------\n");
-	printf("pg_block_header: %p\n", pg_block_header);
-	printf("id: %d\n", pg_block_header->id);
-	printf("object_size: %u\n", pg_block_header->object_size);
-	printf("unallocated_objects: %u\n", pg_block_header->unallocated_objects);
-	printf("freed_objects: %u\n", pg_block_header->freed_objects);
-	printf("freed_LIFO: ");
-	print_LIFO(pg_block_header->freed_LIFO);
-	printf("remotely_freed_LIFO: ");
-	print_LIFO(pg_block_header->remotely_freed_LIFO);
-	printf("------------------------------------\n");
+// Returns 4 Byte-pseudo ptr
+extern "C" void *pseudo_ptr_to_ptr(int *pseudo_ptr) {
+	if (*pseudo_ptr == 0)
+		return NULL;
+	return (void*) (
+		((long unsigned int)pseudo_ptr & ((long unsigned int)~0 - UINT_MAX)) +
+		*(unsigned int*)pseudo_ptr
+	);
 }
 
-extern "C" void print_heap() {
-	printf("--------------- Heap ---------------\n");
-	printf("th: %d\n", th->id);
-	for (int i = 0; i < CLASSES; i++) {
-		printf("class: %d, pg_blocks: %d\n", i, th->heap[i].size);
-		pg_block_header_t *pg_block_header = (pg_block_header_t*)
-			list_get_front(&th->heap[i]);
-		for (int j = 0; j < th->heap[i].size; j++) {
-			print_pg_block_header(pg_block_header);
-			pg_block_header = (pg_block_header_t*)list_get_next(pg_block_header);
-		}
+extern "C" void print_pseudo_LIFO(void *lifo) {
+	while (lifo != NULL) {
+		printf("%p->", lifo);
+		lifo = pseudo_ptr_to_ptr((int*)lifo);
 	}
-	printf("------------------------------------\n");
+	printf("%p\n", lifo);
+}
+
+extern "C" void print_LIFO(void *lifo) {
+	while (lifo != NULL) {
+		printf("%p->", lifo);
+		lifo = *(void**)lifo;
+	}
+	printf("%p\n", lifo);
 }
 
 // Given the size return the memory_class that it belongs to
@@ -142,6 +152,42 @@ extern "C" int get_memory_class(size_t size) {
 		memory_class++;
 	}
 	return memory_class;
+}
+
+extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
+	printf("-------- Page Block Header ---------\n");
+	printf("pg_block_header: %p\n", pg_block_header);
+	printf("id: %d\n", pg_block_header->id);
+	printf("object_size: %u\n", pg_block_header->object_size);
+	printf("unallocated_objects: %u\n", pg_block_header->unallocated_objects);
+	printf("freed_objects: %u\n", pg_block_header->freed_objects);
+	printf("freed_LIFO: ");
+	if (get_memory_class(pg_block_header->object_size) == 0) {
+		print_pseudo_LIFO(pg_block_header->freed_LIFO);
+	}
+	else {
+		print_LIFO(pg_block_header->freed_LIFO);
+	}
+	printf("remotely_freed_LIFO: ");
+	print_LIFO(pg_block_header->remotely_freed_LIFO);
+	printf("------------------------------------\n");
+}
+
+extern "C" void print_heap() {
+	printf("--------------- Heap ---------------\n");
+	printf("th: %d\n", th->id);
+	for (int i = 0; i < CLASSES; i++) {
+		if (th->heap[i].size == 0)
+			continue;
+		printf("class: %d, pg_blocks: %d\n", i, th->heap[i].size);
+		pg_block_header_t *pg_block_header = (pg_block_header_t*)
+			list_get_front(&th->heap[i]);
+		for (int j = 0; j < th->heap[i].size; j++) {
+			print_pg_block_header(pg_block_header);
+			pg_block_header = (pg_block_header_t*)list_get_next(pg_block_header);
+		}
+	}
+	printf("------------------------------------\n");
 }
 
 // Returns the pointer to pg_block_header
@@ -255,16 +301,6 @@ extern "C" void *get_address_pg(void *ptr) {
 	return ((void*)((long int)ptr & pg_mask));
 }
 
-// Returns 4 Byte-pseudo ptr
-extern "C" int ptr_to_pseudo_ptr(void *ptr) {
-	return ((long int)ptr & UINT_MAX);
-}
-
-// Returns 4 Byte-pseudo ptr
-extern "C" void *pseudo_ptr_to_ptr(int *pseudo_ptr) {
-	return (void*)((long int)pseudo_ptr & (~0 - UINT_MAX + *pseudo_ptr));
-}
-
 // Given a pointer in a pg_block the function returns the pg_block_header
 // of this pg_block
 extern "C" pg_block_header_t *get_pg_block_header(void *ptr) {
@@ -280,8 +316,13 @@ extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 	if (pg_block_header->freed_objects > 0) {
 		// Get object from the freed_LIFO
 		obj = pg_block_header->freed_LIFO;
-		// TODO: Special case if obj_size is 4 bytes
-		pg_block_header->freed_LIFO = *(void**)obj;
+		if (memory_class == 0) {
+			// Special case if obj_size is 4 bytes
+			pg_block_header->freed_LIFO = pseudo_ptr_to_ptr((int*)obj);
+		}
+		else {
+			pg_block_header->freed_LIFO = *(void**)obj;
+		}
 		pg_block_header->freed_objects--;
 	}
 	else if (pg_block_header->unallocated_objects > 0) {
@@ -305,7 +346,7 @@ extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 		obj = NULL;
 	}
 	else {
-		// There is no object to allocate, Don't know if this eevr happens
+		// There is no object to allocate, Don't know if this ever happens
 	}
 
 	// I just took the last object, move pg_block at the end of the list
@@ -344,7 +385,10 @@ extern "C" void *my_malloc(size_t size) {
 	// Get an object
 	void *obj = obj_alloc(pg_block_header);
 
-	//print_heap();
+	#ifdef MEMORYLIB_DEBUG
+		printf("EVENT, my_malloc: alocated %p\n", obj);
+		print_heap();
+	#endif
 	return obj;
 }
 
@@ -352,22 +396,32 @@ extern "C" void my_free(void *ptr) {
 	pg_block_header_t *pg_block_header = get_pg_block_header(ptr);
 	int memory_class = get_memory_class(pg_block_header->object_size);
 
-	// TODO: Special case if obj_size is 4 bytes
-
-	*(void**)ptr = pg_block_header->freed_LIFO;
+	// Rearange freed_LIFO
+	if (memory_class == 0) {
+		// Special case if obj_size is 4 bytes, save pseudo_ptr
+		*(int*)ptr = ptr_to_pseudo_ptr(pg_block_header->freed_LIFO);
+	}
+	else {
+		*(void**)ptr = pg_block_header->freed_LIFO;
+	}
 	pg_block_header->freed_LIFO = ptr;
 	pg_block_header->freed_objects++;
 
+	#ifdef MEMORYLIB_DEBUG
+		printf("EVENT, my_free: free %p\n", ptr);
+		print_heap();
+	#endif
+
 	if (pg_block_is_empty(pg_block_header)) {
+		// If the pg_block is empty, free it
 		list_remove(&th->heap[memory_class], pg_block_header);
 		pg_block_free(pg_block_header);
 	}
-	else if (list_get_front(&th->heap[memory_class])	!= pg_block_header) {
+	else if (list_get_front(&th->heap[memory_class]) != pg_block_header) {
+		// Move the pg_block to the beginning of the list
 		list_remove(&th->heap[memory_class], pg_block_header);
 		list_insert_front(&th->heap[memory_class], pg_block_header);
 	}
-
-	//print_heap();
 }
 
 // With the following we can define functions to be called when we enter the
@@ -428,6 +482,9 @@ __attribute__((constructor)) static void initializer(void) {
 		print_memory_class(i);
 		#endif
 	}
+	#ifdef MEMORYLIB_DEBUG
+	printf("\n\n\n\n\n");
+	#endif
 }
 
 __attribute__((destructor)) static void terminator(void) {

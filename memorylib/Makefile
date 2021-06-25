@@ -1,5 +1,5 @@
 CC = g++
-CFLAGS = -Wall -shared -fPIC
+CFLAGS = -Wall -g -shared -fPIC
 LIB = memory.so
 SRC = memory.c list.c
 
