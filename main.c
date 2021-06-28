@@ -10,9 +10,9 @@
 #include <errno.h>
 #include "memorylib/memory.h"
 
-#define ARRAY_SIZE 10000
+#define ARRAY_SIZE 1000
 #define MALLOC_SIZE 1024
-#define PTHREADS_NUM 10
+#define PTHREADS_NUM 1
 
 void *foo() {
 	long int *ptr[ARRAY_SIZE];

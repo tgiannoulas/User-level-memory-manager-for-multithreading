@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <threads.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <limits.h>
@@ -39,7 +39,7 @@ struct pg_block_header {
 	struct pg_block_header *next;			// Used by the lists
 	struct pg_block_header *prev;			// Used by the lists
 	void *remotely_freed_LIFO;				// LIFO TODO: don't know exactly what it is
-	int id;														// TODO: probably not an integer
+	pthread_t id;											// Thread id
 	unsigned int object_size;					// The size of each oblject
 	void *unallocated_ptr;						// Points to the first unallocated object
 	void *freed_LIFO;									// Head of LIFO that saves freed objects
@@ -60,13 +60,14 @@ struct class_info{
 typedef struct class_info class_info_t;
 
 struct thread {
-	int id;
+	pthread_t id;
 	list_t heap[CLASSES];
 
 	thread() {
 		#ifdef MEMORYLIB_DEBUG
 		printf("thread: Implicitly caught thread start\n");
 		#endif
+		id = pthread_self();
 		for (int i=0; i<CLASSES; i++) {
 			list_init(&heap[i]);
 		}
@@ -157,7 +158,7 @@ extern "C" int get_memory_class(size_t size) {
 extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
 	printf("-------- Page Block Header ---------\n");
 	printf("pg_block_header: %p\n", pg_block_header);
-	printf("id: %d\n", pg_block_header->id);
+	printf("id: %ld\n", pg_block_header->id);
 	printf("object_size: %u\n", pg_block_header->object_size);
 	printf("unallocated_objects: %u\n", pg_block_header->unallocated_objects);
 	printf("freed_objects: %u\n", pg_block_header->freed_objects);
@@ -186,7 +187,7 @@ extern "C" void print_less_pg_block_header(pg_block_header_t *pg_block_header) {
 
 extern "C" void print_heap() {
 	printf("--------------- Heap ---------------\n");
-	printf("th: %d\n", th->id);
+	printf("th: %ld\n", th->id);
 	for (int i = 0; i < CLASSES; i++) {
 		if (th->heap[i].size == 0)
 			continue;
@@ -206,13 +207,13 @@ extern "C" void print_less_heap() {
 	for (int i = 0; i < CLASSES; i++) {
 		if (th->heap[i].size == 0)
 			continue;
-		printf("th: %d, class: %d, object_size: %d, objects_in_pg_block: %d, pg_blocks: %d\n",
+		printf("th: %ld, class: %d, object_size: %d, objects_in_pg_block: %d, pg_blocks: %d\n",
 			th->id, i, class_info[i].memory_size, class_info[i].obj_in_pg_block,
 			th->heap[i].size);
 		pg_block_header_t *pg_block_header = (pg_block_header_t*)
 			list_get_front(&th->heap[i]);
 		for (int j = 0; j < th->heap[i].size; j++) {
-			printf("th: %d, pg_block: %2d|  ",th->id, j);
+			printf("th: %ld, pg_block: %2d|  ",th->id, j);
 			print_less_pg_block_header(pg_block_header);
 			pg_block_header = (pg_block_header_t*)list_get_next(pg_block_header);
 		}
@@ -266,7 +267,7 @@ extern "C" void pg_block_init(void *pg_block, int memory_class) {
 	pg_block_header->next = NULL;
 	pg_block_header->prev = NULL;
 	pg_block_header->remotely_freed_LIFO = NULL;
-	pg_block_header->id = 0;
+	pg_block_header->id = th->id;
 	pg_block_header->object_size = class_info[memory_class].memory_size;
 	pg_block_header->unallocated_ptr = (char*)pg_block + class_info[memory_class].
 		memory_size * class_info[memory_class].wasted_obj_pg_header;
@@ -283,7 +284,7 @@ extern "C" void pg_block_init(void *pg_block, int memory_class) {
 	}
 }
 
-// Find the correct size for
+// Allocates memory for memory_class pg_block
 extern "C" void *pg_block_alloc(int memory_class) {
 
 	void *pg_block = mmap(NULL, class_info[memory_class].pg_block_size,
@@ -295,6 +296,7 @@ extern "C" void *pg_block_alloc(int memory_class) {
 	return pg_block;
 }
 
+// Frees memory for pg_block
 extern "C" void pg_block_free(pg_block_header_t* pg_block_header) {
 	void* pg_block = pg_block_header_to_pg_block(pg_block_header);
 	int memory_class = get_memory_class(pg_block_header->object_size);
@@ -304,7 +306,7 @@ extern "C" void pg_block_free(pg_block_header_t* pg_block_header) {
 
 // Returns a pg_block that is not full
 extern "C" pg_block_header *get_pg_block(int memory_class) {
-	// Check if ther is no pg_block at all
+	// Check if there is no pg_block at all
 	if (list_is_empty(&th->heap[memory_class])) {
 		list_insert_front(&th->heap[memory_class], pg_block_to_pg_block_header(
 			pg_block_alloc(memory_class)));
@@ -379,7 +381,7 @@ extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 		// There is no object to allocate, Don't know if this ever happens
 	}
 
-	// I just took the last object, move pg_block at the end of the list
+	// If I just took the last object, move pg_block at the end of the list
 	if (pg_block_is_full(pg_block_header) &&
 		list_get_back(&th->heap[memory_class]) != pg_block_header) {
 		list_remove(&th->heap[memory_class], pg_block_header);
