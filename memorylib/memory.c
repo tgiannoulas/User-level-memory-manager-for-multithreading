@@ -169,8 +169,19 @@ extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
 		print_LIFO(pg_block_header->freed_LIFO);
 	}
 	printf("remotely_freed_LIFO: ");
-	print_LIFO(pg_block_header->remotely_freed_LIFO);
+	if (get_memory_class(pg_block_header->object_size) == 0) {
+		print_pseudo_LIFO(pg_block_header->remotely_freed_LIFO);
+	}
+	else {
+		print_LIFO(pg_block_header->remotely_freed_LIFO);
+	}
 	printf("------------------------------------\n");
+}
+
+extern "C" void print_less_pg_block_header(pg_block_header_t *pg_block_header) {
+	printf("pg_block_header: %p|  unallocated_objects: %4u|  freed_objects: %4u\n",
+	pg_block_header, pg_block_header->unallocated_objects,
+	pg_block_header->freed_objects);
 }
 
 extern "C" void print_heap() {
@@ -184,6 +195,25 @@ extern "C" void print_heap() {
 			list_get_front(&th->heap[i]);
 		for (int j = 0; j < th->heap[i].size; j++) {
 			print_pg_block_header(pg_block_header);
+			pg_block_header = (pg_block_header_t*)list_get_next(pg_block_header);
+		}
+	}
+	printf("------------------------------------\n");
+}
+
+extern "C" void print_less_heap() {
+	printf("--------------- Heap ---------------\n");
+	for (int i = 0; i < CLASSES; i++) {
+		if (th->heap[i].size == 0)
+			continue;
+		printf("th: %d, class: %d, object_size: %d, objects_in_pg_block: %d, pg_blocks: %d\n",
+			th->id, i, class_info[i].memory_size, class_info[i].obj_in_pg_block,
+			th->heap[i].size);
+		pg_block_header_t *pg_block_header = (pg_block_header_t*)
+			list_get_front(&th->heap[i]);
+		for (int j = 0; j < th->heap[i].size; j++) {
+			printf("th: %d, pg_block: %2d|  ",th->id, j);
+			print_less_pg_block_header(pg_block_header);
 			pg_block_header = (pg_block_header_t*)list_get_next(pg_block_header);
 		}
 	}
@@ -387,7 +417,7 @@ extern "C" void *my_malloc(size_t size) {
 
 	#ifdef MEMORYLIB_DEBUG
 		printf("EVENT, my_malloc: alocated %p\n", obj);
-		print_heap();
+		print_less_heap();
 	#endif
 	return obj;
 }
@@ -409,7 +439,7 @@ extern "C" void my_free(void *ptr) {
 
 	#ifdef MEMORYLIB_DEBUG
 		printf("EVENT, my_free: free %p\n", ptr);
-		print_heap();
+		print_less_heap();
 	#endif
 
 	if (pg_block_is_empty(pg_block_header)) {
