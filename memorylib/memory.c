@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <limits.h>
 #include "list.h"
+#include "atomic.h"
 
 #define handle_error(msg) char* error; asprintf(&error, "File: %s, Line: %d: %s", __FILE__, __LINE__, msg); perror(error); exit(EXIT_FAILURE);
 
@@ -64,10 +65,10 @@ struct thread {
 	list_t heap[CLASSES];
 
 	thread() {
-		#ifdef MEMORYLIB_DEBUG
-		printf("thread: Implicitly caught thread start\n");
-		#endif
 		id = pthread_self();
+		#ifdef MEMORYLIB_DEBUG
+		printf("thread: Implicitly caught thread start, th: %ld\n", id);
+		#endif
 		for (int i=0; i<CLASSES; i++) {
 			list_init(&heap[i]);
 		}
@@ -75,7 +76,7 @@ struct thread {
 
 	~thread() {
 		#ifdef MEMORYLIB_DEBUG
-		printf("~thread: Implicitly caught thread end\n");
+		printf("~thread: Implicitly caught thread end, th: %ld\n", id);
 		#endif
 	}
 };
@@ -83,7 +84,7 @@ typedef struct thread thread_t;
 
 // Global Variables
 class_info_t class_info[CLASSES];		// Info for memory_classes
-thread_local thread_t *th;
+thread_local thread_t *th = NULL;
 int pg_size;
 
 // If u want to print ptr in binary pass the size and the pointer to ptr
@@ -427,6 +428,36 @@ extern "C" void *my_malloc(size_t size) {
 extern "C" void my_free(void *ptr) {
 	pg_block_header_t *pg_block_header = get_pg_block_header(ptr);
 	int memory_class = get_memory_class(pg_block_header->object_size);
+
+	// Rearange remotely_freed_LIFO
+	if (th == NULL || pg_block_header->id != th->id) {
+		// Check if th is NULL which means the thread_t hasn't been initiated
+		// because my_malloc hasn't been called by this thread
+		void *old_ptr = pg_block_header->remotely_freed_LIFO;
+
+		// TODO: Check also if the pg_block is orphaned
+		while (compare_and_swap_ptr(&pg_block_header->remotely_freed_LIFO, old_ptr, ptr) == 0) {
+			#ifdef MEMORYLIB_DEBUG
+			printf("compare_and_swap_ptr failed, retry: %p\n", ptr);
+			#endif
+			old_ptr = pg_block_header->remotely_freed_LIFO;
+		}
+
+
+		if (memory_class == 0) {
+			// Special case if obj_size is 4 bytes, save pseudo_ptr
+			*(int*)ptr = ptr_to_pseudo_ptr(old_ptr);
+		}
+		else {
+			*(void**)ptr = old_ptr;
+		}
+
+		#ifdef MEMORYLIB_DEBUG
+			printf("EVENT, my_free: remote free %p\n", ptr);
+		#endif
+
+		return;
+	}
 
 	// Rearange freed_LIFO
 	if (memory_class == 0) {
