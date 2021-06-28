@@ -1,15 +1,18 @@
 CC = gcc
-CFLAGS = -Wall -g -lpthread
+CFLAGS = -Wall -g
+
 MLIBDIR = memorylib
 MLIB = memory
-EXECUTABLE = main
 
+LDFLAGS = -lpthread
+LDFLAGS += -l$(MLIB) -L./$(MLIBDIR)
+EXECUTABLE = main
 
 all: $(EXECUTABLE)
 
 $(EXECUTABLE): $(EXECUTABLE).c
 	cd $(MLIBDIR); make;
-	$(CC) $(CFLAGS) $@.c -l$(MLIB) -L./$(MLIBDIR) -o $@
+	$(CC) $(CFLAGS) $@.c $(LDFLAGS) -o $@
 
 clean:
 	cd $(MLIBDIR); make clean;
