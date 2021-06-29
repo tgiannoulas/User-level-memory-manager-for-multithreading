@@ -416,21 +416,6 @@ extern "C" void *pg_block_alloc(int memory_class) {
 	return pg_block;
 }
 
-// Frees memory for pg_block
-extern "C" void pg_block_free(pg_block_header_t* pg_block_header) {
-	void* pg_block = pg_block_header_to_pg_block(pg_block_header);
-	int memory_class = get_memory_class(pg_block_header->object_size);
-
-	// Check if the pg_block can be cached
-	if (th->local_cache[class_info[memory_class].cache_class] == NULL) {
-		th->local_cache[class_info[memory_class].cache_class] = pg_block;
-		return;
-	}
-	// Return memory to OS
-	if (munmap(pg_block, class_info[memory_class].pg_block_size) == -1)
-		{ handle_error("munmap failed"); }
-}
-
 // Returns a pg_block that is not full
 extern "C" pg_block_header *get_pg_block(int memory_class) {
 	// Get the first pg_block
@@ -459,6 +444,21 @@ extern "C" pg_block_header *get_pg_block(int memory_class) {
 	}
 
 	return pg_block_header;
+}
+
+// Frees memory for pg_block
+extern "C" void return_pg_block(pg_block_header_t* pg_block_header) {
+	void* pg_block = pg_block_header_to_pg_block(pg_block_header);
+	int memory_class = get_memory_class(pg_block_header->object_size);
+
+	// Check if the pg_block can be cached
+	if (th->local_cache[class_info[memory_class].cache_class] == NULL) {
+		th->local_cache[class_info[memory_class].cache_class] = pg_block;
+		return;
+	}
+	// Return memory to OS
+	if (munmap(pg_block, class_info[memory_class].pg_block_size) == -1)
+		{ handle_error("munmap failed"); }
 }
 
 // Given a pointer the function returns the address of the address page
@@ -617,7 +617,7 @@ extern "C" void my_free(void *ptr) {
 	if (pg_block_is_empty(pg_block_header)) {
 		// If the pg_block is empty, free it
 		list_remove(&th->heap[memory_class], pg_block_header);
-		pg_block_free(pg_block_header);
+		return_pg_block(pg_block_header);
 	}
 	else if (list_get_front(&th->heap[memory_class]) != pg_block_header) {
 		// Move the pg_block to the beginning of the list
