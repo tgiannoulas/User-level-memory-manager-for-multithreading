@@ -418,8 +418,24 @@ extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 		pg_block_header->unallocated_objects--;
 	}
 	else if (pg_block_header->remotely_freed_LIFO != NULL) {
-		// Check the remotely_freed_LIFO
-		obj = NULL;
+		// Get the lifo from the remotely_freed_LIFO
+		void *lifo = cmp_and_swap(&pg_block_header->remotely_freed_LIFO, NULL);
+
+		// Get object from the lifo
+		obj = lifo;
+		// Save lifo to freed_LIFO
+		if (memory_class == 0) {
+			// Special case if obj_size is 4 bytes
+			pg_block_header->freed_LIFO = pseudo_ptr_to_ptr((int*)obj);
+			// Count the free_objects
+			pg_block_header->freed_objects = pseudo_lifo_size(pg_block_header->freed_LIFO);
+		}
+		else {
+			pg_block_header->freed_LIFO = *(void**)obj;
+			// Count the free_objects
+			pg_block_header->freed_objects = lifo_size(pg_block_header->freed_LIFO);
+		}
+
 	}
 	else {
 		// There is no object to allocate, Don't know if this ever happens
