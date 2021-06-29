@@ -16,10 +16,18 @@
 
 void *ptr[ARRAY_SIZE];
 
+void *my_array_test_cmp_swap_rem_free[2029];
+int th0_ready = 0;
+
 /**
  * This functions tests if the cmp&swap works when a thread remotely frees
+ * and when the thread that allocated transfers the remotely_freed_LIFO to the
+ * freed_LIFO
  * The thread with id 0 allocated all the memory and the other threads wait and
  * then each thread frees a portion of this memory
+ * Then the thread 0 mallocs one object and bacause there are no available
+ * objects in unallocated and freed_LIFO it brings the objects from
+ * remotely_freed_LIFO
  * In order to see the results
  		* define the MEMORYLIB_DEBUG at memory.c, or comment out the ifdef at the
  		* printf that prints the message, @ my_free() at the remotely_free part
@@ -28,25 +36,34 @@ void *ptr[ARRAY_SIZE];
 void th_test_cmp_swap_rem_free(int *id) {
 	int array_size = 100;
 	int malloc_size = 8;
-	int pthread_num = 21;
-
-	void *my_array[(pthread_num-1) * array_size];
-	int th0_ready = 0;
+	//int pthread_num = 21;
 
 	if (*id == 0) {
 		// thread 1 mallocs all the memory
-		for (int i = 0; i < (pthread_num-1) * array_size; i++) {
-			my_array[i] = my_malloc(malloc_size);
+		for (int i = 0; i < 2029; i++) {
+			my_array_test_cmp_swap_rem_free[i] = my_malloc(malloc_size);
 		}
 		th0_ready = 1;
 		sleep(1);
-		print_less_heap();
+		print_heap();
+
+		void *foo = my_malloc(malloc_size);
+		print_heap();
+
+		my_free(foo);
+		print_heap();
+
 	}
 	else {
 		// the other threads frees a portion of the memory allocated by thread 1
 		while (th0_ready != 1) {}
 		for (int i = (*id-1) * array_size; i < *id * array_size; i++) {
-			my_free(my_array[i]);
+			my_free(my_array_test_cmp_swap_rem_free[i]);
+		}
+		if (*id == 1) {
+			for (int i = 2000; i < 2029; i++) {
+				my_free(my_array_test_cmp_swap_rem_free[i]);
+			}
 		}
 	}
 }
@@ -140,7 +157,7 @@ void test_malloc() {
 
 int main (int argc, char *argv[]) {
 
-	test_local_cache();
+	test_malloc();
 
 	return 0;
 }

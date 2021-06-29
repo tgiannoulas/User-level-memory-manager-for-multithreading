@@ -269,14 +269,75 @@ extern "C" int lifo_size(void *lifo) {
 	return size;
 }
 
-extern "C" void *cmp_and_swap(void** address, void* new_ptr) {
+extern "C" void *atomic_empty_lifo(void** address) {
 	void *old_ptr = *address;
+	void *new_ptr = NULL;
+
+	while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0) {
+		//#ifdef MEMORYLIB_DEBUG
+		printf("atomic_empty_lifo: compare_and_swap failed, retry: %p\n", old_ptr);
+		//#endif
+		old_ptr = *address;
+	}
+
+	return old_ptr;
+}
+
+extern "C" void *atomic_pop(void** address) {
+	void *old_ptr = *address;
+	void *new_ptr = *(void**)old_ptr;
 
 	while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0) {
 		#ifdef MEMORYLIB_DEBUG
-		printf("compare_and_swap_ptr failed, retry: %p\n", new_ptr);
+		printf("atomic_pop: compare_and_swap_ptr failed, retry: %p\n", old_ptr);
 		#endif
 		old_ptr = *address;
+		new_ptr = *(void**)old_ptr;
+	}
+
+	return old_ptr;
+}
+
+extern "C" void *pseudo_atomic_pop(void** address) {
+	void *old_ptr = *address;
+	int *new_ptr = (int*)pseudo_ptr_to_ptr((int*)old_ptr);
+
+	while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0) {
+		#ifdef MEMORYLIB_DEBUG
+		printf("pseudo_atomic_pop: compare_and_swap failed, retry: %p\n", old_ptr);
+		#endif
+		old_ptr = *address;
+		new_ptr = (int*)pseudo_ptr_to_ptr((int*)old_ptr);
+	}
+
+	return old_ptr;
+}
+
+extern "C" void *atomic_push(void** address, void* new_ptr) {
+	void *old_ptr = *address;
+	*(void**)new_ptr = old_ptr;
+
+	while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0) {
+		//#ifdef MEMORYLIB_DEBUG
+		printf("atomic_push: compare_and_swap failed, retry: %p\n", new_ptr);
+		//#endif
+		old_ptr = *address;
+		*(void**)new_ptr = old_ptr;
+	}
+
+	return old_ptr;
+}
+
+extern "C" void *pseudo_atomic_push(void** address, void* new_ptr) {
+	void *old_ptr = *address;
+	*(int*)new_ptr = ptr_to_pseudo_ptr(old_ptr);
+
+	while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0) {
+		//#ifdef MEMORYLIB_DEBUG
+		printf("pseudo_atomic_push: compare_and_swap failed, retry: %p\n", new_ptr);
+		//#endif
+		old_ptr = *address;
+		*(int*)new_ptr = ptr_to_pseudo_ptr(old_ptr);
 	}
 
 	return old_ptr;
@@ -375,8 +436,9 @@ extern "C" pg_block_header *get_pg_block(int memory_class) {
 	// Get the first pg_block
 	pg_block_header_t *pg_block_header = (pg_block_header_t*)list_get_front(
 		&th->heap[memory_class]);
-	// Check if its full - (just in case that i allocate an orphaned pg_block
-	// that is already being used and is full)
+	// Check if there are no pg_blocks or if the pg_block is full
+	// (just in case that I allocate an orphaned pg_block
+	// that is already being used and is full, check again if its full )
 	while (list_is_empty(&th->heap[memory_class]) || pg_block_is_full(pg_block_header)) {
 		void *pg_block;
 		if (th->local_cache[class_info[memory_class].cache_class] != NULL) {
@@ -447,7 +509,7 @@ extern "C" void *obj_alloc(pg_block_header_t *pg_block_header) {
 	}
 	else if (pg_block_header->remotely_freed_LIFO != NULL) {
 		// Get the lifo from the remotely_freed_LIFO
-		void *lifo = cmp_and_swap(&pg_block_header->remotely_freed_LIFO, NULL);
+		void *lifo = atomic_empty_lifo(&pg_block_header->remotely_freed_LIFO);
 
 		// Get object from the lifo
 		obj = lifo;
@@ -521,15 +583,12 @@ extern "C" void my_free(void *ptr) {
 	if (th == NULL || pg_block_header->id != th->id) {
 		// Check if th is NULL which means the thread_t hasn't been initiated
 		// because my_malloc hasn't been called by this thread
-		void *old_ptr = cmp_and_swap(&pg_block_header->remotely_freed_LIFO, ptr);
 
-		if (memory_class == 0) {
+		if (memory_class == 0)
 			// Special case if obj_size is 4 bytes, save pseudo_ptr
-			*(int*)ptr = ptr_to_pseudo_ptr(old_ptr);
-		}
-		else {
-			*(void**)ptr = old_ptr;
-		}
+			pseudo_atomic_push(&pg_block_header->remotely_freed_LIFO, ptr);
+		else
+			atomic_push(&pg_block_header->remotely_freed_LIFO, ptr);
 
 		#ifdef MEMORYLIB_DEBUG
 			printf("EVENT, my_free: remote free %p\n", ptr);
