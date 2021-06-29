@@ -158,6 +158,8 @@ void test_malloc() {
 int main (int argc, char *argv[]) {
 
 	test_malloc();
+	test_local_cache();
+	test_cmp_swap_rem_free();
 
 	return 0;
 }

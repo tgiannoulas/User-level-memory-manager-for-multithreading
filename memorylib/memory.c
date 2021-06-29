@@ -72,7 +72,7 @@ typedef struct storage storage_t;
 struct thread {
 	pthread_t id;
 	list_t heap[CLASSES];
-	void *local_cache[CLASSES];
+	pg_block_header_t *local_cache[CLASSES];
 
 	thread() {
 		id = pthread_self();
@@ -378,12 +378,12 @@ extern "C" int pg_block_is_empty(pg_block_header_t *pg_block_header) {
 }
 
 // Initializes pg_block and pg_block_header
-extern "C" void pg_block_init(void *pg_block, int memory_class) {
+extern "C" void pg_block_init(pg_block_header_t *pg_block_header, int memory_class) {
 	// The first 8 bytes of every page in a pg_block are a pointer
 	// to the pg_block_header
 	// The pg_block_header is located in the first page of the pg_block,
 	// after the 8 bytes pointer
-	pg_block_header_t *pg_block_header = pg_block_to_pg_block_header(pg_block);
+	void *pg_block = pg_block_header_to_pg_block(pg_block_header);
 
 	// Initialize pg_block_header fields
 	pg_block_header->next = NULL;
@@ -407,13 +407,13 @@ extern "C" void pg_block_init(void *pg_block, int memory_class) {
 }
 
 // PgManager Allocates memory for memory_class pg_block
-extern "C" void *pg_block_alloc(int memory_class) {
+extern "C" pg_block_header *pg_block_alloc(int memory_class) {
 
 	void *pg_block = mmap(NULL, class_info[memory_class].pg_block_size,
 		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (pg_block == MAP_FAILED) { handle_error("mmap failed"); }
 
-	return pg_block;
+	return pg_block_to_pg_block_header(pg_block);
 }
 
 // PgManager caches or deallocates a pg_block
@@ -434,19 +434,17 @@ extern "C" pg_block_header *get_pg_block(int memory_class) {
 	// (just in case that I allocate an orphaned pg_block
 	// that is already being used and is full, check again if its full )
 	while (list_is_empty(&th->heap[memory_class]) || pg_block_is_full(pg_block_header)) {
-		void *pg_block;
 		if (th->local_cache[class_info[memory_class].cache_class] != NULL) {
 			// Check local cache
-			pg_block = th->local_cache[class_info[memory_class].cache_class];
+			pg_block_header = th->local_cache[class_info[memory_class].cache_class];
 		}
 		else {
 			// Allocate pg_block
-			pg_block = pg_block_alloc(memory_class);
+			pg_block_header = pg_block_alloc(memory_class);
 		}
-		pg_block_init(pg_block, memory_class);
+		pg_block_init(pg_block_header, memory_class);
 
-		list_insert_front(&th->heap[memory_class],
-			pg_block_to_pg_block_header(pg_block));
+		list_insert_front(&th->heap[memory_class], pg_block_header);
 
 		pg_block_header = (pg_block_header_t*)list_get_front(
 			&th->heap[memory_class]);
@@ -457,12 +455,11 @@ extern "C" pg_block_header *get_pg_block(int memory_class) {
 
 // Frees memory for pg_block
 extern "C" void return_pg_block(pg_block_header_t* pg_block_header) {
-	void* pg_block = pg_block_header_to_pg_block(pg_block_header);
 	int memory_class = get_memory_class(pg_block_header->object_size);
 
 	// Check if the pg_block can be cached
 	if (th->local_cache[class_info[memory_class].cache_class] == NULL) {
-		th->local_cache[class_info[memory_class].cache_class] = pg_block;
+		th->local_cache[class_info[memory_class].cache_class] = pg_block_header;
 		return;
 	}
 	// Return memory to OS
