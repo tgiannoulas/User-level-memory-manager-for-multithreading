@@ -10,9 +10,9 @@
 #include <errno.h>
 #include "memorylib/memory.h"
 
-#define ARRAY_SIZE 10
+#define ARRAY_SIZE 100
 #define MALLOC_SIZE 8
-#define PTHREADS_NUM 2
+#define PTHREADS_NUM 21
 
 void *ptr[(PTHREADS_NUM-1) * ARRAY_SIZE];
 int th0_ready = 0;
@@ -40,6 +40,7 @@ void th_test_cmp_swap_rem_free(int *id) {
 		}
 		th0_ready = 1;
 		sleep(1);
+		print_less_heap();
 	}
 	else {
 		// the other threads frees a portion of the memory allocated by thread 1
@@ -56,8 +57,7 @@ void test_cmp_swap_rem_free() {
 
 	for (int i = 0; i < PTHREADS_NUM; i++) {
 		id[i] = i;
-		if (pthread_create(&pthreads[i], NULL, (void*)test_cmp_swap_rem_free,
-			&id[i]) != 0) {
+		if (pthread_create(&pthreads[i], NULL, (void*)th_test_cmp_swap_rem_free,	&id[i]) != 0) {
 			perror("pthread_create\n");
 			exit(1);
 		}
@@ -101,7 +101,7 @@ void test_malloc() {
 
 int main (int argc, char *argv[]) {
 
-	test_malloc();
+	test_cmp_swap_rem_free();
 
 	return 0;
 }

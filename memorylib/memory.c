@@ -36,6 +36,8 @@
 #define MIN_PG_BLOCK_SIZE 16384
 #define MAX_PG_BLOCK_SIZE 262144
 
+#define MAX_PRINT_LIFO 10
+
 struct pg_block_header {
 	struct pg_block_header *next;			// Used by the lists
 	struct pg_block_header *prev;			// Used by the lists
@@ -130,17 +132,27 @@ extern "C" void *pseudo_ptr_to_ptr(int *pseudo_ptr) {
 }
 
 extern "C" void print_pseudo_LIFO(void *lifo) {
+	int i = 0;
 	while (lifo != NULL) {
-		printf("%p->", lifo);
+		if (i < MAX_PRINT_LIFO)
+			printf("%p->", lifo);
+		else if (i == MAX_PRINT_LIFO + 1)
+			printf(".....->");
 		lifo = pseudo_ptr_to_ptr((int*)lifo);
+		i++;
 	}
 	printf("%p\n", lifo);
 }
 
 extern "C" void print_LIFO(void *lifo) {
+	int i = 0;
 	while (lifo != NULL) {
-		printf("%p->", lifo);
+		if (i < MAX_PRINT_LIFO)
+			printf("%p->", lifo);
+		else if (i == MAX_PRINT_LIFO + 1)
+			printf(".....->");
 		lifo = *(void**)lifo;
+		i++;
 	}
 	printf("%p\n", lifo);
 }
@@ -157,12 +169,10 @@ extern "C" int get_memory_class(size_t size) {
 }
 
 extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
-	printf("-------- Page Block Header ---------\n");
-	printf("pg_block_header: %p\n", pg_block_header);
-	printf("id: %ld\n", pg_block_header->id);
-	printf("object_size: %u\n", pg_block_header->object_size);
-	printf("unallocated_objects: %u\n", pg_block_header->unallocated_objects);
-	printf("freed_objects: %u\n", pg_block_header->freed_objects);
+	printf("pg_block_header: %p|  unallocated_objects: %4u|  freed_objects: %4u, remotely_freed_LIFO %d\n",
+	pg_block_header, pg_block_header->unallocated_objects,
+	pg_block_header->freed_objects,
+	pg_block_header->remotely_freed_LIFO==NULL?0:1);
 	printf("freed_LIFO: ");
 	if (get_memory_class(pg_block_header->object_size) == 0) {
 		print_pseudo_LIFO(pg_block_header->freed_LIFO);
@@ -177,25 +187,27 @@ extern "C" void print_pg_block_header(pg_block_header_t *pg_block_header) {
 	else {
 		print_LIFO(pg_block_header->remotely_freed_LIFO);
 	}
-	printf("------------------------------------\n");
 }
 
 extern "C" void print_less_pg_block_header(pg_block_header_t *pg_block_header) {
-	printf("pg_block_header: %p|  unallocated_objects: %4u|  freed_objects: %4u\n",
+	printf("pg_block_header: %p|  unallocated_objects: %4u|  freed_objects: %4u, remotely_freed_LIFO %d\n",
 	pg_block_header, pg_block_header->unallocated_objects,
-	pg_block_header->freed_objects);
+	pg_block_header->freed_objects,
+	pg_block_header->remotely_freed_LIFO==NULL?0:1);
 }
 
 extern "C" void print_heap() {
 	printf("--------------- Heap ---------------\n");
-	printf("th: %ld\n", th->id);
 	for (int i = 0; i < CLASSES; i++) {
 		if (th->heap[i].size == 0)
 			continue;
-		printf("class: %d, pg_blocks: %d\n", i, th->heap[i].size);
+		printf("th: %ld, class: %d, object_size: %d, objects_in_pg_block: %d, pg_blocks: %d\n",
+			th->id, i, class_info[i].memory_size, class_info[i].obj_in_pg_block,
+			th->heap[i].size);
 		pg_block_header_t *pg_block_header = (pg_block_header_t*)
 			list_get_front(&th->heap[i]);
 		for (int j = 0; j < th->heap[i].size; j++) {
+			printf("th: %ld, pg_block: %2d|  ",th->id, j);
 			print_pg_block_header(pg_block_header);
 			pg_block_header = (pg_block_header_t*)list_get_next(pg_block_header);
 		}
@@ -220,6 +232,37 @@ extern "C" void print_less_heap() {
 		}
 	}
 	printf("------------------------------------\n");
+}
+
+extern "C" int pseudo_lifo_size(void *lifo) {
+	int size = 0;
+	while (lifo != NULL) {
+		size++;
+		lifo = pseudo_ptr_to_ptr((int*)lifo);
+	}
+	return size;
+}
+
+extern "C" int lifo_size(void *lifo) {
+	int size = 0;
+	while (lifo != NULL) {
+		size++;
+		lifo = *(void**)lifo;
+	}
+	return size;
+}
+
+extern "C" void *cmp_and_swap(void** address, void* new_ptr) {
+	void *old_ptr = *address;
+
+	while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0) {
+		#ifdef MEMORYLIB_DEBUG
+		printf("compare_and_swap_ptr failed, retry: %p\n", new_ptr);
+		#endif
+		old_ptr = *address;
+	}
+
+	return old_ptr;
 }
 
 // Returns the pointer to pg_block_header
@@ -420,7 +463,8 @@ extern "C" void *my_malloc(size_t size) {
 
 	#ifdef MEMORYLIB_DEBUG
 		printf("EVENT, my_malloc: alocated %p\n", obj);
-		print_less_heap();
+		//print_less_heap();
+		print_heap();
 	#endif
 	return obj;
 }
@@ -433,16 +477,7 @@ extern "C" void my_free(void *ptr) {
 	if (th == NULL || pg_block_header->id != th->id) {
 		// Check if th is NULL which means the thread_t hasn't been initiated
 		// because my_malloc hasn't been called by this thread
-		void *old_ptr = pg_block_header->remotely_freed_LIFO;
-
-		// TODO: Check also if the pg_block is orphaned
-		while (compare_and_swap_ptr(&pg_block_header->remotely_freed_LIFO, old_ptr, ptr) == 0) {
-			#ifdef MEMORYLIB_DEBUG
-			printf("compare_and_swap_ptr failed, retry: %p\n", ptr);
-			#endif
-			old_ptr = pg_block_header->remotely_freed_LIFO;
-		}
-
+		void *old_ptr = cmp_and_swap(&pg_block_header->remotely_freed_LIFO, ptr);
 
 		if (memory_class == 0) {
 			// Special case if obj_size is 4 bytes, save pseudo_ptr
@@ -472,7 +507,8 @@ extern "C" void my_free(void *ptr) {
 
 	#ifdef MEMORYLIB_DEBUG
 		printf("EVENT, my_free: free %p\n", ptr);
-		print_less_heap();
+		//print_less_heap();
+		print_heap();
 	#endif
 
 	if (pg_block_is_empty(pg_block_header)) {
