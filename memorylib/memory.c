@@ -59,12 +59,20 @@ struct class_info{
 	unsigned int wasted_obj_pg_header;
 	unsigned int wasted_obj_ptr_per_pg;
 	unsigned int wasted_obj_ptr_total;
+	unsigned int cache_class;
 };
 typedef struct class_info class_info_t;
+
+struct storage{
+	int pg_block_size;
+	void *pg_block;
+};
+typedef struct storage storage_t;
 
 struct thread {
 	pthread_t id;
 	list_t heap[CLASSES];
+	void *local_cache[CLASSES];
 
 	thread() {
 		id = pthread_self();
@@ -73,6 +81,7 @@ struct thread {
 		#endif
 		for (int i=0; i<CLASSES; i++) {
 			list_init(&heap[i]);
+			local_cache[i] = NULL;
 		}
 	}
 
@@ -87,6 +96,7 @@ typedef struct thread thread_t;
 // Global Variables
 class_info_t class_info[CLASSES];		// Info for memory_classes
 thread_local thread_t *th = NULL;
+int cache_classes;
 int pg_size;
 
 // If u want to print ptr in binary pass the size and the pointer to ptr
@@ -113,6 +123,7 @@ extern "C" void print_memory_class(unsigned int memory_class) {
 	printf("wasted_obj_pg_header: %u\n", class_info[memory_class].wasted_obj_pg_header);
 	printf("wasted_obj_ptr_per_pg: %u\n", class_info[memory_class].wasted_obj_ptr_per_pg);
 	printf("wasted_obj_ptr_total: %u\n", class_info[memory_class].wasted_obj_ptr_total);
+	printf("cache_class: %u\n", class_info[memory_class].cache_class);
 	printf("------------------------------------\n");
 }
 
@@ -155,6 +166,12 @@ extern "C" void print_LIFO(void *lifo) {
 		i++;
 	}
 	printf("%p\n", lifo);
+}
+
+extern "C" void print_local_cache() {
+	for (int i = 0; i < cache_classes; i++) {
+		printf("local_class[%d] = %p\n", i, th->local_cache[i]);
+	}
 }
 
 // Given the size return the memory_class that it belongs to
@@ -335,8 +352,6 @@ extern "C" void *pg_block_alloc(int memory_class) {
 		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (pg_block == MAP_FAILED) { handle_error("mmap failed"); }
 
-	pg_block_init(pg_block, memory_class);
-
 	return pg_block;
 }
 
@@ -344,26 +359,39 @@ extern "C" void *pg_block_alloc(int memory_class) {
 extern "C" void pg_block_free(pg_block_header_t* pg_block_header) {
 	void* pg_block = pg_block_header_to_pg_block(pg_block_header);
 	int memory_class = get_memory_class(pg_block_header->object_size);
+
+	// Check if the pg_block can be cached
+	if (th->local_cache[class_info[memory_class].cache_class] == NULL) {
+		th->local_cache[class_info[memory_class].cache_class] = pg_block;
+		return;
+	}
+	// Return memory to OS
 	if (munmap(pg_block, class_info[memory_class].pg_block_size) == -1)
 		{ handle_error("munmap failed"); }
 }
 
 // Returns a pg_block that is not full
 extern "C" pg_block_header *get_pg_block(int memory_class) {
-	// Check if there is no pg_block at all
-	if (list_is_empty(&th->heap[memory_class])) {
-		list_insert_front(&th->heap[memory_class], pg_block_to_pg_block_header(
-			pg_block_alloc(memory_class)));
-	}
-
 	// Get the first pg_block
 	pg_block_header_t *pg_block_header = (pg_block_header_t*)list_get_front(
 		&th->heap[memory_class]);
 	// Check if its full - (just in case that i allocate an orphaned pg_block
 	// that is already being used and is full)
-	while (pg_block_is_full(pg_block_header)) {
-		list_insert_front(&th->heap[memory_class], pg_block_to_pg_block_header(
-			pg_block_alloc(memory_class)));
+	while (list_is_empty(&th->heap[memory_class]) || pg_block_is_full(pg_block_header)) {
+		void *pg_block;
+		if (th->local_cache[class_info[memory_class].cache_class] != NULL) {
+			// Check local cache
+			pg_block = th->local_cache[class_info[memory_class].cache_class];
+		}
+		else {
+			// Allocate pg_block
+			pg_block = pg_block_alloc(memory_class);
+		}
+		pg_block_init(pg_block, memory_class);
+
+		list_insert_front(&th->heap[memory_class],
+			pg_block_to_pg_block_header(pg_block));
+
 		pg_block_header = (pg_block_header_t*)list_get_front(
 			&th->heap[memory_class]);
 	}
@@ -591,12 +619,25 @@ __attribute__((constructor)) static void initializer(void) {
 		// Measure how many objects in total are gonna be available in the pg_block
 		class_info[i].obj_in_pg_block -= class_info[i].wasted_obj_pg_header +
 			class_info[i].wasted_obj_ptr_total;
-
-
-		#ifdef MEMORYLIB_DEBUG
-		print_memory_class(i);
-		#endif
 	}
+
+	// Assign memory_class to cache_class
+	cache_classes = 0;
+	unsigned int pg_block_size = 0;
+	for (int i = 1; i < CLASSES; i++) {
+		if (pg_block_size != class_info[i].pg_block_size) {
+			pg_block_size = class_info[i].pg_block_size;
+			cache_classes++;
+		}
+		class_info[i].cache_class = cache_classes-1;
+	}
+
+	#ifdef MEMORYLIB_DEBUG
+	for (int i = 0; i < CLASSES; i++)
+		print_memory_class(i);
+	print_local_cache();
+	#endif
+
 	#ifdef MEMORYLIB_DEBUG
 	printf("\n\n\n\n\n");
 	#endif

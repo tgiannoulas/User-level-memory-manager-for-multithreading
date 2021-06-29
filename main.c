@@ -10,12 +10,11 @@
 #include <errno.h>
 #include "memorylib/memory.h"
 
-#define ARRAY_SIZE 100
-#define MALLOC_SIZE 8
-#define PTHREADS_NUM 21
+#define ARRAY_SIZE 65
+#define MALLOC_SIZE 2048
+#define PTHREADS_NUM 1
 
-void *ptr[(PTHREADS_NUM-1) * ARRAY_SIZE];
-int th0_ready = 0;
+void *ptr[ARRAY_SIZE];
 
 /**
  * This functions tests if the cmp&swap works when a thread remotely frees
@@ -24,19 +23,20 @@ int th0_ready = 0;
  * In order to see the results
  		* define the MEMORYLIB_DEBUG at memory.c, or comment out the ifdef at the
  		* printf that prints the message, @ my_free() at the remotely_free part
- 		* set ARRAY_SIZE 100
- 		* set MALLOC_SIZE 8
- 		* set PTHREADS_NUM 21
- 		* Set global variables
- 			* void *ptr[(PTHREADS_NUM-1) * ARRAY_SIZE];
- 			* int th0_ready = 0;
- * @param  id [id range from 0 to PTHREADS_NUM - 1]
+ * @param  id [range from 0 to pthread_num - 1]
  */
 void th_test_cmp_swap_rem_free(int *id) {
+	int array_size = 100;
+	int malloc_size = 8;
+	int pthread_num = 21;
+
+	void *my_array[(pthread_num-1) * array_size];
+	int th0_ready = 0;
+
 	if (*id == 0) {
 		// thread 1 mallocs all the memory
-		for (int i = 0; i < (PTHREADS_NUM-1) * ARRAY_SIZE; i++) {
-			ptr[i] = my_malloc(MALLOC_SIZE);
+		for (int i = 0; i < (pthread_num-1) * array_size; i++) {
+			my_array[i] = my_malloc(malloc_size);
 		}
 		th0_ready = 1;
 		sleep(1);
@@ -45,17 +45,19 @@ void th_test_cmp_swap_rem_free(int *id) {
 	else {
 		// the other threads frees a portion of the memory allocated by thread 1
 		while (th0_ready != 1) {}
-		for (int i = (*id-1) * ARRAY_SIZE; i < *id * ARRAY_SIZE; i++) {
-			my_free(ptr[i]);
+		for (int i = (*id-1) * array_size; i < *id * array_size; i++) {
+			my_free(my_array[i]);
 		}
 	}
 }
 
 void test_cmp_swap_rem_free() {
-	pthread_t pthreads[PTHREADS_NUM];
-	int id[PTHREADS_NUM];
+	int pthread_num = 21;
 
-	for (int i = 0; i < PTHREADS_NUM; i++) {
+	pthread_t pthreads[pthread_num];
+	int id[pthread_num];
+
+	for (int i = 0; i < pthread_num; i++) {
 		id[i] = i;
 		if (pthread_create(&pthreads[i], NULL, (void*)th_test_cmp_swap_rem_free,	&id[i]) != 0) {
 			perror("pthread_create\n");
@@ -63,9 +65,46 @@ void test_cmp_swap_rem_free() {
 		}
 	}
 
-	for (int i = 0; i < PTHREADS_NUM; i++) {
+	for (int i = 0; i < pthread_num; i++) {
 		pthread_join(pthreads[i], NULL);
 	}
+}
+
+/**
+ * This function tests the local cache
+ * Firstly 65 objects get allocated
+ * this results to a full gp_block and a pg_block with just one object
+ * Then the one object gets freed and another malloc is called
+ */
+void test_local_cache() {
+	int array_size = 65;
+	int malloc_size = 2048;
+
+	void *my_array[array_size];
+
+	for (int i = 0; i < array_size; i++) {
+		my_array[i] = my_malloc(malloc_size);
+	}
+
+	print_less_heap();
+	printf("Before freeing the last object in pg_block\n");
+	print_local_cache();
+
+	my_free(my_array[array_size-1]);
+
+	print_less_heap();
+	printf("After freeing the last object in pg_block\n");
+	print_local_cache();
+
+	my_array[array_size-1] = my_malloc(malloc_size);
+
+	print_less_heap();
+
+	for (int i = 0; i < array_size; i++) {
+		my_free(my_array[i]);
+	}
+
+	print_less_heap();
 }
 
 void th_test_malloc() {
@@ -101,7 +140,7 @@ void test_malloc() {
 
 int main (int argc, char *argv[]) {
 
-	test_cmp_swap_rem_free();
+	test_local_cache();
 
 	return 0;
 }
