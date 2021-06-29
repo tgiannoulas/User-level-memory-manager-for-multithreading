@@ -406,7 +406,7 @@ extern "C" void pg_block_init(void *pg_block, int memory_class) {
 	}
 }
 
-// Allocates memory for memory_class pg_block
+// PgManager Allocates memory for memory_class pg_block
 extern "C" void *pg_block_alloc(int memory_class) {
 
 	void *pg_block = mmap(NULL, class_info[memory_class].pg_block_size,
@@ -414,6 +414,15 @@ extern "C" void *pg_block_alloc(int memory_class) {
 	if (pg_block == MAP_FAILED) { handle_error("mmap failed"); }
 
 	return pg_block;
+}
+
+// PgManager caches or deallocates a pg_block
+extern "C" void pg_block_free(pg_block_header_t* pg_block_header){
+	void* pg_block = pg_block_header_to_pg_block(pg_block_header);
+	int memory_class = get_memory_class(pg_block_header->object_size);
+
+	if (munmap(pg_block, class_info[memory_class].pg_block_size) == -1)
+		{ handle_error("munmap failed"); }
 }
 
 // Returns a pg_block that is not full
@@ -457,8 +466,7 @@ extern "C" void return_pg_block(pg_block_header_t* pg_block_header) {
 		return;
 	}
 	// Return memory to OS
-	if (munmap(pg_block, class_info[memory_class].pg_block_size) == -1)
-		{ handle_error("munmap failed"); }
+	pg_block_free(pg_block_header);
 }
 
 // Given a pointer the function returns the address of the address page
