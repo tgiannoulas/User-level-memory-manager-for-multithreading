@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -43,15 +44,15 @@ int cache_classes;
 int pg_size;
 
 struct pg_block_header {
-	struct pg_block_header *next;			// Used by the lists
-	struct pg_block_header *prev;			// Used by the lists
-	volatile void *remotely_freed_LIFO;				// LIFO TODO: don't know exactly what it is
-	pthread_t id;											// Thread id
-	unsigned int object_size;					// The size of each oblject
-	void *unallocated_ptr;						// Points to the first unallocated object
-	void *freed_LIFO;									// Head of LIFO that saves freed objects
-	unsigned int unallocated_objects;	// Number of unallocated object in the pg_block
-	unsigned int freed_objects;				// Number of free objects in the pg_block
+	struct pg_block_header *next;				// Used by the lists
+	struct pg_block_header *prev;				// Used by the lists
+	volatile void *remotely_freed_LIFO;	// Head of LIFO that saves the remotel_freed_objects
+	pthread_t id;												// Thread id
+	unsigned int object_size;						// The size of each oblject
+	void *unallocated_ptr;							// Points to the first unallocated object
+	void *freed_LIFO;										// Head of LIFO that saves freed objects
+	unsigned int unallocated_objects;		// Number of unallocated object in the pg_block
+	unsigned int freed_objects;					// Number of free objects in the pg_block
 };
 typedef struct pg_block_header pg_block_header_t;
 pg_block_header_t *global_cache[CLASSES];				// Global cache managed by the pg_manager
@@ -744,6 +745,38 @@ extern "C" void my_free(void *ptr) {
 		list_remove(&th->heap[memory_class], pg_block_header);
 		list_insert_front(&th->heap[memory_class], pg_block_header);
 	}
+}
+
+extern "C" void *my_realloc(void *ptr, size_t size) {
+	if (th == NULL) {
+		thread_local static thread_t my_th;
+		th = &my_th;
+	}
+
+	// Check input
+	if (size <= 0) {
+		printf("my_malloc: Wrong size\n");
+		return NULL;
+	}
+	else if (size > MAX_SIZE_SMALL_OBJ) {
+		// TODO: big object
+		printf("my_malloc: Big object, not supported yet\n");
+		return NULL;
+	}
+
+	int new_memory_class = get_memory_class(size);
+	pg_block_header_t *pg_block_header = get_pg_block_header(ptr);
+	int old_memory_class = get_memory_class(pg_block_header->object_size);
+
+	if (new_memory_class <= old_memory_class) {
+		return ptr;
+	}
+
+	void *obj = my_malloc(size);
+	memcpy(obj, ptr, pg_block_header->object_size);
+	my_free(ptr);
+
+	return obj;
 }
 
 // With the following we can define functions to be called when we enter the

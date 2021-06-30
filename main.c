@@ -208,6 +208,15 @@ void test_termination() {
 	}
 }
 
+void test_realloc() {
+	void *ptr = my_malloc(1024);
+	print_less_heap();
+	ptr = my_realloc(ptr, 2048);
+	print_less_heap();
+	my_free(ptr);
+	print_less_heap();
+}
+
 void th_test_malloc() {
 	long int *ptr[ARRAY_SIZE];
 
@@ -245,6 +254,7 @@ int main (int argc, char *argv[]) {
 	//test_cache();
 	//test_termination();
 	//test_cmp_swap_rem_free();
+	test_realloc();
 
 	return 0;
 }
