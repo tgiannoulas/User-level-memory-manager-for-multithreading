@@ -175,6 +175,12 @@ extern "C" void print_local_cache() {
 	}
 }
 
+extern "C" void print_global_cache() {
+	for (int i = 0; i < cache_classes; i++) {
+		printf("global_class[%d] = %p\n", i, global_cache[i]);
+	}
+}
+
 // Given the size return the memory_class that it belongs to
 extern "C" int get_memory_class(size_t size) {
 	int memory_class = 0;
@@ -410,7 +416,7 @@ extern "C" void pg_block_init(pg_block_header_t *pg_block_header,
 
 // PgManager Allocates memory for memory_class pg_block
 extern "C" pg_block_header *pg_block_alloc(int memory_class) {
-	// Check to see if there are available pg_block in global_cache
+	// Check to see if there is available pg_block in global_cache
 	pg_block_header_t *old_ptr;
 	if ((old_ptr = global_cache[class_info[memory_class].cache_class]) != NULL) {
 		if (compare_and_swap_ptr(&global_cache[class_info[memory_class].cache_class]
@@ -431,6 +437,15 @@ extern "C" void pg_block_free(pg_block_header_t* pg_block_header){
 	void* pg_block = pg_block_header_to_pg_block(pg_block_header);
 	int memory_class = get_memory_class(pg_block_header->object_size);
 
+	// Check if the pg_block can be cached globally
+	pg_block_header_t *old_ptr;
+	if ((old_ptr = global_cache[class_info[memory_class].cache_class]) == NULL) {
+		if (compare_and_swap_ptr(&global_cache[class_info[memory_class].cache_class]
+			, old_ptr, pg_block_header) != 0) {
+			return;
+		}
+	}
+	// Otherwise, return memory to OS
 	if (munmap(pg_block, class_info[memory_class].pg_block_size) == -1)
 		{ handle_error("munmap failed"); }
 }
@@ -447,6 +462,7 @@ extern "C" pg_block_header *get_pg_block(int memory_class) {
 		if (th->local_cache[class_info[memory_class].cache_class] != NULL) {
 			// Check local cache
 			pg_block_header = th->local_cache[class_info[memory_class].cache_class];
+			th->local_cache[class_info[memory_class].cache_class] = NULL;
 		}
 		else {
 			// Allocate pg_block
@@ -467,7 +483,7 @@ extern "C" pg_block_header *get_pg_block(int memory_class) {
 extern "C" void return_pg_block(pg_block_header_t* pg_block_header) {
 	int memory_class = get_memory_class(pg_block_header->object_size);
 
-	// Check if the pg_block can be cached
+	// Check if the pg_block can be cached locally
 	if (th->local_cache[class_info[memory_class].cache_class] == NULL) {
 		th->local_cache[class_info[memory_class].cache_class] = pg_block_header;
 		return;
@@ -584,8 +600,8 @@ extern "C" void *my_malloc(size_t size) {
 
 	#ifdef MEMORYLIB_DEBUG
 		printf("EVENT, my_malloc: alocated %p\n", obj);
-		//print_less_heap();
-		print_heap();
+		print_less_heap();
+		//print_heap();
 	#endif
 	return obj;
 }
@@ -625,8 +641,8 @@ extern "C" void my_free(void *ptr) {
 
 	#ifdef MEMORYLIB_DEBUG
 		printf("EVENT, my_free: free %p\n", ptr);
-		//print_less_heap();
-		print_heap();
+		print_less_heap();
+		//print_heap();
 	#endif
 
 	if (pg_block_is_empty(pg_block_header)) {
@@ -699,6 +715,8 @@ __attribute__((constructor)) static void initializer(void) {
 	cache_classes = 0;
 	unsigned int pg_block_size = 0;
 	for (int i = 1; i < CLASSES; i++) {
+		global_cache[i] = NULL;
+
 		if (pg_block_size != class_info[i].pg_block_size) {
 			pg_block_size = class_info[i].pg_block_size;
 			cache_classes++;
@@ -709,7 +727,7 @@ __attribute__((constructor)) static void initializer(void) {
 	#ifdef MEMORYLIB_DEBUG
 	for (int i = 0; i < CLASSES; i++)
 		print_memory_class(i);
-	print_local_cache();
+	print_global_cache();
 	#endif
 
 	#ifdef MEMORYLIB_DEBUG

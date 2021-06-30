@@ -88,13 +88,21 @@ void test_cmp_swap_rem_free() {
 }
 
 /**
- * This function tests the local cache
- * Firstly 65 objects get allocated
- * this results to a full gp_block and a pg_block with just one object
- * Then the one object gets freed and another malloc is called
+ * This function tests the local and the global cache
+ * Firstly 129 objects get allocated
+ * this results to 2 full pg_blocks and a pg_block with just one object
+ * To test the local cache first
+ * The one object gets freed and another malloc is called
+ * We see the effect in the local_cache output
+ * To test the global cache first
+ * All the objects gets freed
+ * This results to 1 pg_block cached in local_cache and 1 global cache
+ * The 3rd pg_block returns to the OS
+ * Then we allocate again 129 objects
+ * We see the effects in the local_cache and global_cache output
  */
-void test_local_cache() {
-	int array_size = 65;
+void test_cache() {
+	int array_size = 129;
 	int malloc_size = 2048;
 
 	void *my_array[array_size];
@@ -103,25 +111,47 @@ void test_local_cache() {
 		my_array[i] = my_malloc(malloc_size);
 	}
 
+	printf("Malloc 129 obj, 2 full pg_blocks and 1 with just 1 obj\n");
 	print_less_heap();
-	printf("Before freeing the last object in pg_block\n");
 	print_local_cache();
+	print_global_cache();
 
 	my_free(my_array[array_size-1]);
 
+	printf("Free the obj from the pg_block with the 1 obj\n");
 	print_less_heap();
-	printf("After freeing the last object in pg_block\n");
 	print_local_cache();
+	print_global_cache();
 
 	my_array[array_size-1] = my_malloc(malloc_size);
 
+	printf("Malloc one obj\n");
 	print_less_heap();
+	print_local_cache();
+	print_global_cache();
 
 	for (int i = 0; i < array_size; i++) {
 		my_free(my_array[i]);
 	}
 
+	printf("Free 129 objs\n");
 	print_less_heap();
+	print_local_cache();
+	print_global_cache();
+
+	for (int i = 0; i < array_size; i++) {
+		my_array[i] = my_malloc(malloc_size);
+	}
+
+	printf("Malloc 129 objs\n");
+	print_less_heap();
+	print_local_cache();
+	print_global_cache();
+
+	for (int i = 0; i < array_size; i++) {
+		my_free(my_array[i]);
+	}
+
 }
 
 void th_test_malloc() {
@@ -157,9 +187,9 @@ void test_malloc() {
 
 int main (int argc, char *argv[]) {
 
-	test_malloc();
-	test_local_cache();
-	test_cmp_swap_rem_free();
+	//test_malloc();
+	test_cache();
+	//test_cmp_swap_rem_free();
 
 	return 0;
 }

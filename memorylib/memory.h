@@ -6,5 +6,6 @@ void my_free(void *ptr);
 void print_less_heap();
 void print_heap();
 void print_local_cache();
+void print_global_cache();
 
 #endif
