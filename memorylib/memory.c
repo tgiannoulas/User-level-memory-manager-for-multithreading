@@ -16,7 +16,7 @@
 
 #define handle_error(msg) char* error; asprintf(&error, "File: %s, Line: %d: %s", __FILE__, __LINE__, msg); perror(error); exit(EXIT_FAILURE);
 
-//#define MEMORYLIB_DEBUG
+#define MEMORYLIB_DEBUG
 
 #define CLASSES 10
 // 0 : 1-4
@@ -36,6 +36,8 @@
 #define OBJ_IN_PG_BLOCK_HINT 1024
 #define MIN_PG_BLOCK_SIZE 16384
 #define MAX_PG_BLOCK_SIZE 262144
+// Enough for 16GB concurrent memory allocation
+#define LARGE_OBJ_TABLE_SIZE 33554432
 
 #define MAX_PRINT_LIFO 10
 
@@ -69,6 +71,14 @@ struct class_info{
 };
 typedef struct class_info class_info_t;
 class_info_t class_info[CLASSES];		// Info for memory_classes
+
+struct large_obj_table {
+	void *array;
+	volatile void *freed_LIFO;
+	volatile void *unallocated_ptr;
+};
+typedef struct large_obj_table large_obj_table_t;
+large_obj_table_t large_obj_table;
 
 extern "C" void print_pseudo_LIFO(volatile void *lifo);
 extern "C" void print_LIFO(volatile void *lifo);
@@ -160,6 +170,17 @@ struct thread {
 typedef struct thread thread_t;
 thread_local thread_t *th = NULL;
 
+extern "C" void *memory_alloc(size_t size) {
+	void *mem = mmap(NULL, size, PROT_READ | PROT_WRITE,
+		MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (mem == MAP_FAILED) { handle_error("mmap failed"); }
+	return mem;
+}
+
+extern "C" void memory_dealloc(void* mem, size_t size) {
+	if (munmap(mem, size) == -1) { handle_error("munmap failed"); }
+}
+
 // If u want to print ptr in binary pass the size and the pointer to ptr
 extern "C" void printBits(size_t const size, void const *ptr) {
 	unsigned char *b = (unsigned char*) ptr;
@@ -227,6 +248,27 @@ extern "C" void print_LIFO(volatile void *lifo) {
 		i++;
 	}
 	printf("%p\n", lifo);
+}
+
+extern "C" void print_large_obj_table() {
+	printf("--------------- large_obj_table ---------------\n");
+	printf("array: %p|  unallocated: %p|\n",
+		large_obj_table.array, large_obj_table.unallocated_ptr);
+
+	printf("freed_LIFO: ");
+	print_LIFO(large_obj_table.freed_LIFO);
+
+	printf("table: ");
+	int i = 0;
+	for (void *tmp = large_obj_table.array; tmp < large_obj_table.unallocated_ptr;
+		tmp = (void*)((long)tmp + 8)) {
+			if (i < MAX_PRINT_LIFO)
+				printf("%p->", *(void**)tmp);
+			else if (i == MAX_PRINT_LIFO + 1)
+				printf(".....");
+			i++;
+	}
+	printf("\n");
 }
 
 extern "C" void print_local_cache() {
@@ -354,18 +396,14 @@ extern "C" void *atomic_empty_lifo(volatile void** address) {
 	return old_ptr;
 }
 
-extern "C" void *atomic_pop(void** address) {
-	void *old_ptr = *address;
-	void *new_ptr = *(void**)old_ptr;
-
-	while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0) {
-		#ifdef MEMORYLIB_DEBUG
-		printf("atomic_pop: compare_and_swap_ptr failed, retry: %p\n", old_ptr);
-		#endif
-		old_ptr = *address;
+extern "C" void *atomic_pop(volatile void** address) {
+	void *old_ptr, *new_ptr;
+	do {
+		old_ptr = *(void**)address;
+		if (old_ptr == NULL)
+			return NULL;
 		new_ptr = *(void**)old_ptr;
-	}
-
+	} while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0);
 	return old_ptr;
 }
 
@@ -384,15 +422,15 @@ extern "C" void *pseudo_atomic_pop(void** address) {
 	return old_ptr;
 }
 
-extern "C" void *atomic_push(void** address, void* new_ptr) {
-	void *old_ptr = *address;
+extern "C" void *atomic_push(volatile void** address, void* new_ptr) {
+	void *old_ptr = *(void**)address;
 	*(void**)new_ptr = old_ptr;
 
 	while (compare_and_swap_ptr(address, old_ptr, new_ptr) == 0) {
 		//#ifdef MEMORYLIB_DEBUG
 		printf("atomic_push: compare_and_swap failed, retry: %p\n", new_ptr);
 		//#endif
-		old_ptr = *address;
+		old_ptr = *(void**)address;
 		*(void**)new_ptr = old_ptr;
 	}
 
@@ -489,9 +527,7 @@ extern "C" pg_block_header *pg_block_alloc(int memory_class) {
 		}
 	}
 	// Otherwise, allocate memory from OS
-	void *pg_block = mmap(NULL, class_info[memory_class].pg_block_size,
-		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (pg_block == MAP_FAILED) { handle_error("mmap failed"); }
+	void *pg_block = memory_alloc(class_info[memory_class].pg_block_size);
 
 	return pg_block_to_pg_block_header(pg_block);
 }
@@ -510,8 +546,7 @@ extern "C" void pg_block_free(pg_block_header_t* pg_block_header) {
 		}
 	}
 	// Otherwise, return memory to OS
-	if (munmap(pg_block, class_info[memory_class].pg_block_size) == -1)
-		{ handle_error("munmap failed"); }
+	memory_dealloc(pg_block, class_info[memory_class].pg_block_size);
 }
 
 // Returns a pg_block that is not full
@@ -652,9 +687,32 @@ extern "C" void *my_malloc(size_t size) {
 		return NULL;
 	}
 	else if (size > MAX_SIZE_SMALL_OBJ) {
-		// TODO: big object
-		printf("my_malloc: Big object, not supported yet\n");
-		return NULL;
+		// I'll return a 16B alligned memory
+		void *obj = memory_alloc(size+16);
+		*(size_t*)obj = size;
+		obj = (void*)((unsigned long)obj + 16);
+
+		void *ptr = atomic_pop(&large_obj_table.freed_LIFO);
+		if (ptr != NULL) {
+			// Get obj from freed_LIFO
+			*(void**)ptr = obj;
+		}
+		else {
+			// Get obj from unallocated
+			void *old_ptr, *new_ptr;
+			do {
+				old_ptr = (void*)large_obj_table.unallocated_ptr;
+
+				if (old_ptr > (void*)((long)large_obj_table.array +
+					LARGE_OBJ_TABLE_SIZE)) {
+					printf("Run out of memory\n");
+					exit(1);
+				}
+				new_ptr = (void*)((long)large_obj_table.unallocated_ptr + 8);
+			} while(compare_and_swap_ptr(&large_obj_table.unallocated_ptr, old_ptr, new_ptr) == 0);
+			*(void**)old_ptr = obj;
+		}
+		return obj;
 	}
 
 	int memory_class = get_memory_class(size);
@@ -678,15 +736,26 @@ extern "C" void my_free(void *ptr) {
 		th = &my_th;
 	}
 
+
+	for (void *tmp = large_obj_table.array; tmp < large_obj_table.unallocated_ptr;
+		tmp = (void*)((long)tmp + 8)) {
+		if (*(void**)tmp == ptr) {
+			ptr = (void*)((long)ptr - 16);
+			memory_dealloc(ptr, *(size_t*)ptr);
+			*(void**)tmp = NULL;
+			atomic_push(&large_obj_table.freed_LIFO, tmp);
+			return;
+		}
+	}
+
+	// Then it is a small obj
 	pg_block_header_t *pg_block_header = get_pg_block_header(ptr);
 	int memory_class = get_memory_class(pg_block_header->object_size);
 
 	// Rearange remotely_freed_LIFO
-	if (th == NULL || pg_block_header->id != th->id) {
-		// Check if th is NULL which means the thread_t hasn't been initiated
-		// because my_malloc hasn't been called by this thread
+	if (pg_block_header->id != th->id) {
 		void *old_ptr;
-		do {
+		while (1) {
 			old_ptr = (void*)pg_block_header->remotely_freed_LIFO;
 			if (memory_class == 0) {
 				*(int*)ptr = ptr_to_pseudo_ptr(old_ptr);
@@ -709,10 +778,18 @@ extern "C" void my_free(void *ptr) {
 				return;
 			}
 
-		} while (compare_and_swap_ptr(&pg_block_header->remotely_freed_LIFO,
-			old_ptr, ptr) == 0);
+			if (compare_and_swap_ptr(&pg_block_header->remotely_freed_LIFO,
+				old_ptr, ptr) == 0) {
+					#ifdef MEMORYLIB_DEBUG
+					printf("my_free: cmp&swap failed, retry\n");
+					#endif
+				}
+				else {
+					break;
+				}
+		}
 		#ifdef MEMORYLIB_DEBUG
-			printf("EVENT, my_free: remote free %p\n", ptr);
+		printf("EVENT, my_free: remote free %p\n", ptr);
 		#endif
 
 		return;
@@ -851,6 +928,11 @@ __attribute__((constructor)) static void initializer(void) {
 		print_memory_class(i);
 	print_global_cache();
 	#endif
+
+	// Allocate the large_obj_table
+	large_obj_table.array = memory_alloc(LARGE_OBJ_TABLE_SIZE);
+	large_obj_table.freed_LIFO = NULL;
+	large_obj_table.unallocated_ptr = large_obj_table.array;
 
 	#ifdef MEMORYLIB_DEBUG
 	printf("\n\n\n\n\n");

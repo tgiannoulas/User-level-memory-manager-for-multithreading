@@ -17,6 +17,7 @@
 void *ptr[ARRAY_SIZE];
 
 void *my_array_test_termination[64];
+void *my_array_test_large_obj[100000];
 
 void *my_array_test_cmp_swap_rem_free[2029];
 int th0_ready = 0;
@@ -38,7 +39,6 @@ int th0_ready = 0;
 void th_test_cmp_swap_rem_free(int *id) {
 	int array_size = 100;
 	int malloc_size = 8;
-	//int pthread_num = 21;
 
 	if (*id == 0) {
 		// thread 1 mallocs all the memory
@@ -156,7 +156,14 @@ void test_cache() {
 
 }
 
-
+/**
+ * This function tests what happens when a thread exits
+ * In this example 21 threads are created
+ * Thread 0 allocates 2000 8B objects, enough to fit in one pg_block, max=2029
+ * Then the other 20 threads free 100 objects reached
+ * One of them, "the fastest" has to adopt the pg_block
+ * @param id [range from 0 to pthread_num - 1]
+ */
 void th_test_termination(int *id) {
 	int array_size = 100;
 	int malloc_size = 8;
@@ -208,6 +215,9 @@ void test_termination() {
 	}
 }
 
+/**
+ * This simple example just mallocs, reallocs and frees one object
+ */
 void test_realloc() {
 	void *ptr = my_malloc(1024);
 	print_less_heap();
@@ -217,44 +227,76 @@ void test_realloc() {
 	print_less_heap();
 }
 
-void th_test_malloc() {
-	long int *ptr[ARRAY_SIZE];
+/**
+ * In this function thread 0 mallocs large objs and then 10 other threads
+ * free these the same amount of objects
+ * @param id [range from 0 to pthread_num - 1]
+ */
+void th_test_large_obj(int *id) {
+	int array_size = 10000;
+	int malloc_size = 100000;
 
-	for (int i = 0; i < ARRAY_SIZE; i++) {
-		ptr[i] = my_malloc(MALLOC_SIZE);
+	if (*id == 0) {
+		for (int i = 0; i < 100000; i++) {
+			my_array_test_large_obj[i] = my_malloc(malloc_size);
+		}
+		print_large_obj_table();
+		th0_ready = 1;
+		sleep(2);
+		print_large_obj_table();
 	}
+	else {
+		while (th0_ready == 0) {}
 
-	print_less_heap();
-
-	for (int i = 0; i < ARRAY_SIZE; i++) {
-		my_free(ptr[i]);
+		for (int i = (*id-1) * array_size; i < *id * array_size; i++) {
+			my_free(my_array_test_large_obj[i]);
+		}
 	}
-
-	print_less_heap();
 }
 
-void test_malloc() {
-	pthread_t pthreads[PTHREADS_NUM];
+void test_large_obj() {
+	int pthread_num = 11;
 
-	for (int i = 0; i < PTHREADS_NUM; i++) {
-		if (pthread_create(&pthreads[i], NULL, (void*)th_test_malloc, NULL) != 0) {
+	pthread_t pthreads[pthread_num];
+	int id[pthread_num];
+
+	for (int i = 0; i < pthread_num; i++) {
+		id[i] = i;
+		if (pthread_create(&pthreads[i], NULL, (void*)th_test_large_obj,	&id[i]) != 0) {
 			perror("pthread_create\n");
 			exit(1);
 		}
 	}
 
-	for (int i = 0; i < PTHREADS_NUM; i++) {
+	for (int i = 0; i < pthread_num; i++) {
 		pthread_join(pthreads[i], NULL);
 	}
 }
 
 int main (int argc, char *argv[]) {
 
-	//test_malloc();
-	//test_cache();
-	//test_termination();
-	//test_cmp_swap_rem_free();
-	test_realloc();
+	if (argc != 2) {
+		printf("False arguements\n");
+		return -1;
+	}
+
+	int test = atoi(argv[1]);
+
+	if (ex == 1) {
+		test_cache();
+	}
+	else if (ex == 2) {
+		test_cmp_swap_rem_free();
+	}
+	else if (ex == 3) {
+		test_realloc();
+	}
+	else if (ex == 4) {
+		test_termination();
+	}
+	else if (ex == 5) {
+		test_large_obj();
+	}
 
 	return 0;
 }

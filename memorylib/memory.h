@@ -8,5 +8,6 @@ void print_less_heap();
 void print_heap();
 void print_local_cache();
 void print_global_cache();
+void print_large_obj_table();
 
 #endif
