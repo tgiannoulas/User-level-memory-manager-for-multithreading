@@ -96,6 +96,7 @@ typedef struct thread thread_t;
 // Global Variables
 class_info_t class_info[CLASSES];		// Info for memory_classes
 thread_local thread_t *th = NULL;
+pg_block_header_t *global_cache[CLASSES];				// Global cache managed by the pg_manager
 int cache_classes;
 int pg_size;
 
@@ -378,7 +379,8 @@ extern "C" int pg_block_is_empty(pg_block_header_t *pg_block_header) {
 }
 
 // Initializes pg_block and pg_block_header
-extern "C" void pg_block_init(pg_block_header_t *pg_block_header, int memory_class) {
+extern "C" void pg_block_init(pg_block_header_t *pg_block_header,
+	int memory_class) {
 	// The first 8 bytes of every page in a pg_block are a pointer
 	// to the pg_block_header
 	// The pg_block_header is located in the first page of the pg_block,
@@ -408,7 +410,15 @@ extern "C" void pg_block_init(pg_block_header_t *pg_block_header, int memory_cla
 
 // PgManager Allocates memory for memory_class pg_block
 extern "C" pg_block_header *pg_block_alloc(int memory_class) {
-
+	// Check to see if there are available pg_block in global_cache
+	pg_block_header_t *old_ptr;
+	if ((old_ptr = global_cache[class_info[memory_class].cache_class]) != NULL) {
+		if (compare_and_swap_ptr(&global_cache[class_info[memory_class].cache_class]
+			, old_ptr, NULL) != 0) {
+			return old_ptr;
+		}
+	}
+	// Otherwise, allocate memory from OS
 	void *pg_block = mmap(NULL, class_info[memory_class].pg_block_size,
 		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (pg_block == MAP_FAILED) { handle_error("mmap failed"); }
