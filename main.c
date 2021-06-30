@@ -16,6 +16,8 @@
 
 void *ptr[ARRAY_SIZE];
 
+void *my_array_test_termination[64];
+
 void *my_array_test_cmp_swap_rem_free[2029];
 int th0_ready = 0;
 
@@ -154,6 +156,58 @@ void test_cache() {
 
 }
 
+
+void th_test_termination(int *id) {
+	int array_size = 100;
+	int malloc_size = 8;
+
+	if (*id == 0) {
+		for (int i = 0; i < 2000; i++) {
+			my_array_test_termination[i] = my_malloc(malloc_size);
+		}
+		printf("th: %d, Malloc 10 obj\n", *id);
+		print_less_heap();
+		th0_ready = 1;
+
+	}
+	else {
+		while (th0_ready == 0) {}
+
+		for (int i = (*id-1) * array_size; i < *id * array_size; i++) {
+			my_free(my_array_test_termination[i]);
+		}
+
+		printf("th: %d, Free 100 obj\n", *id);
+		print_heap();
+		sleep(1);
+
+	}
+	if (*id == 1) {
+		sleep(1);
+		print_global_cache();
+	}
+
+}
+
+void test_termination() {
+	int pthread_num = 21;
+
+	pthread_t pthreads[pthread_num];
+	int id[pthread_num];
+
+	for (int i = 0; i < pthread_num; i++) {
+		id[i] = i;
+		if (pthread_create(&pthreads[i], NULL, (void*)th_test_termination,	&id[i]) != 0) {
+			perror("pthread_create\n");
+			exit(1);
+		}
+	}
+
+	for (int i = 0; i < pthread_num; i++) {
+		pthread_join(pthreads[i], NULL);
+	}
+}
+
 void th_test_malloc() {
 	long int *ptr[ARRAY_SIZE];
 
@@ -188,7 +242,8 @@ void test_malloc() {
 int main (int argc, char *argv[]) {
 
 	//test_malloc();
-	test_cache();
+	//test_cache();
+	//test_termination();
 	//test_cmp_swap_rem_free();
 
 	return 0;
